@@ -1,9 +1,11 @@
 using CinemaCity.API.Auth;
 using CinemaCity.API.Movies;
+using CinemaCity.API.Search;
 using CinemaCity.Application;
 using CinemaCity.Infrastructure;
 using CinemaCity.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.OpenApi;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -22,12 +24,39 @@ builder.Services.AddCors(options =>
     });
 });
 builder.Services.AddOpenApi();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Title = "CinemaCity API",
+        Version = "v1",
+        Description = "API для каталогу, автентифікації та керування CinemaCity."
+    });
+
+    options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Name = "Authorization",
+        Type = SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT",
+        In = ParameterLocation.Header,
+        Description = "Вставте JWT access token з відповіді login без префікса Bearer."
+    });
+
+});
 
 var app = builder.Build();
 
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
+    app.UseSwagger();
+    app.UseSwaggerUI(options =>
+    {
+        options.SwaggerEndpoint("/swagger/v1/swagger.json", "CinemaCity API v1");
+        options.DocumentTitle = "CinemaCity API";
+    });
 }
 
 if (!app.Environment.IsDevelopment())
@@ -57,5 +86,6 @@ app.MapGet("/health/database", async (AppDbContext dbContext, CancellationToken 
 
 app.MapAuthEndpoints();
 app.MapMovieEndpoints();
+app.MapSearchEndpoints();
 
 app.Run();

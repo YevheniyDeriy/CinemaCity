@@ -1,6 +1,6 @@
 import React, { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import ReactDOM from 'react-dom/client';
-import { BrowserRouter, Link, Navigate, Route, Routes, useParams } from 'react-router-dom';
+import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import './styles.css';
 
 const defaultApiUrl =
@@ -77,6 +77,38 @@ type PagedResult<T> = {
   page: number;
   pageSize: number;
   total: number;
+};
+
+type SearchScope = 'all' | 'movie' | 'series' | 'episode' | 'person';
+
+type SearchResponse = {
+  scope: string;
+  query: string;
+  movies: Array<{
+    id: string;
+    title: string;
+    originalTitle?: string | null;
+    contentType: number | string;
+    releaseYear: number;
+    posterUrl?: string | null;
+    averageRating: number;
+  }>;
+  episodes: Array<{
+    id: string;
+    title: string;
+    seriesId: string;
+    seriesTitle: string;
+    seasonNumber: number;
+    episodeNumber: number;
+    airDate?: string | null;
+    averageRating: number;
+  }>;
+  people: Array<{
+    id: string;
+    fullName: string;
+    photoUrl?: string | null;
+    birthPlace?: string | null;
+  }>;
 };
 
 const spotlightSlides: SpotlightSlide[] = [
@@ -292,6 +324,7 @@ function App() {
       <Routes>
         <Route path="/" element={<HomePage />} />
         <Route path="/catalog" element={<CatalogPage />} />
+        <Route path="/search" element={<SearchPage />} />
         <Route path="/movies/:id" element={<MovieDetailsPage />} />
         <Route
           path="/auth"
@@ -381,6 +414,8 @@ function HomePage() {
           </div>
         </div>
       </section>
+
+      <SiteFooter />
     </main>
   );
 }
@@ -612,23 +647,234 @@ function AuthPage({
           ) : null}
         </section>
       </section>
+
+      <SiteFooter />
     </main>
   );
 }
 
 function SiteHeader() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const params = new URLSearchParams(location.search);
+  const initialScope = params.get('scope') as SearchScope | null;
+  const [searchQuery, setSearchQuery] = useState(location.pathname === '/search' ? params.get('q') ?? '' : '');
+  const [searchScope, setSearchScope] = useState<SearchScope>(
+    initialScope && ['all', 'movie', 'series', 'episode', 'person'].includes(initialScope) ? initialScope : 'all'
+  );
+
+  useEffect(() => {
+    if (location.pathname !== '/search') {
+      return;
+    }
+
+    const currentParams = new URLSearchParams(location.search);
+    const currentScope = currentParams.get('scope') as SearchScope | null;
+    setSearchQuery(currentParams.get('q') ?? '');
+    setSearchScope(currentScope && ['all', 'movie', 'series', 'episode', 'person'].includes(currentScope) ? currentScope : 'all');
+  }, [location.pathname, location.search]);
+
+  function handleHeaderSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const trimmedQuery = searchQuery.trim();
+
+    if (!trimmedQuery) {
+      navigate('/catalog');
+      return;
+    }
+
+    const searchParams = new URLSearchParams({
+      q: trimmedQuery,
+      scope: searchScope
+    });
+
+    navigate(`/search?${searchParams}`);
+  }
+
   return (
     <header className="site-header" aria-label="Головне меню">
       <Link className="brand-row" to="/">
         <span className="brand-mark">CC</span>
         <span>CinemaCity</span>
       </Link>
+
+      <form className="header-search" role="search" onSubmit={handleHeaderSearch}>
+        <label className="sr-only" htmlFor="header-search-scope">
+          Тип пошуку
+        </label>
+        <select id="header-search-scope" value={searchScope} onChange={(event) => setSearchScope(event.target.value as SearchScope)}>
+          <option value="all">Усе</option>
+          <option value="movie">Стрічка</option>
+          <option value="series">Серіал</option>
+          <option value="episode">Епізод</option>
+          <option value="person">Знаменитість</option>
+        </select>
+        <label className="sr-only" htmlFor="header-search-query">
+          Пошук
+        </label>
+        <input
+          id="header-search-query"
+          value={searchQuery}
+          onChange={(event) => setSearchQuery(event.target.value)}
+          placeholder="Назва, епізод або ім’я"
+        />
+        <button type="submit" aria-label="Пошук">
+          ⌕
+        </button>
+      </form>
+
       <nav>
         <Link to="/">Головна</Link>
         <Link to="/catalog">Каталог</Link>
         <Link to="/auth">Увійти</Link>
       </nav>
     </header>
+  );
+}
+
+function SiteFooter() {
+  return (
+    <footer className="site-footer">
+      <Link className="brand-row" to="/">
+        <span className="brand-mark">CC</span>
+        <span>CinemaCity</span>
+      </Link>
+      <nav aria-label="Нижнє меню">
+        <Link to="/">Головна</Link>
+        <Link to="/catalog">Каталог</Link>
+        <Link to="/search">Пошук</Link>
+      </nav>
+    </footer>
+  );
+}
+
+function SearchPage() {
+  const location = useLocation();
+  const [results, setResults] = useState<SearchResponse | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState('');
+  const params = new URLSearchParams(location.search);
+  const query = params.get('q')?.trim() ?? '';
+  const scope = params.get('scope') ?? 'all';
+
+  useEffect(() => {
+    if (!query) {
+      setResults(null);
+      setError('');
+      return;
+    }
+
+    const controller = new AbortController();
+    const searchParams = new URLSearchParams({ q: query, scope });
+    setIsLoading(true);
+    setError('');
+
+    fetch(`${apiUrl}/api/search?${searchParams}`, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error('Не вдалося виконати пошук.');
+        }
+
+        return (await response.json()) as SearchResponse;
+      })
+      .then(setResults)
+      .catch((fetchError) => {
+        if (fetchError instanceof DOMException && fetchError.name === 'AbortError') {
+          return;
+        }
+
+        setError(fetchError instanceof TypeError ? 'Пошук тимчасово недоступний. Спробуйте оновити сторінку пізніше.' : fetchError instanceof Error ? fetchError.message : 'Не вдалося виконати пошук.');
+      })
+      .finally(() => setIsLoading(false));
+
+    return () => controller.abort();
+  }, [query, scope]);
+
+  const totalResults = (results?.movies.length ?? 0) + (results?.episodes.length ?? 0) + (results?.people.length ?? 0);
+
+  return (
+    <main className="page-shell">
+      <SiteHeader />
+
+      <section className="search-shell" aria-label="Результати пошуку">
+        <div className="catalog-heading">
+          <p className="kicker">Пошук CinemaCity</p>
+          <h1>{query ? `Результати для “${query}”` : 'Почніть пошук у верхній панелі'}</h1>
+          <p>Знаходьте стрічки, серіали, епізоди та людей з каталогу.</p>
+        </div>
+
+        {isLoading ? <p className="catalog-message">Пошук...</p> : null}
+        {error ? <p className="catalog-message">{error}</p> : null}
+
+        {!isLoading && query && results && totalResults === 0 ? (
+          <div className="empty-state">
+            <h2>Нічого не знайдено</h2>
+            <p>Спробуйте іншу назву або змініть тип пошуку у хідері.</p>
+          </div>
+        ) : null}
+
+        {results?.movies.length ? (
+          <section className="search-section">
+            <h2>Стрічки та серіали</h2>
+            <div className="movie-grid compact">
+              {results.movies.map((movie) => (
+                <MovieCardLink
+                  key={movie.id}
+                  movie={{
+                    id: movie.id,
+                    title: movie.title,
+                    originalTitle: movie.originalTitle,
+                    contentType: movie.contentType,
+                    releaseYear: movie.releaseYear,
+                    posterUrl: movie.posterUrl,
+                    backdropUrl: null,
+                    averageRating: movie.averageRating,
+                    ratingsCount: 0,
+                    genres: []
+                  }}
+                />
+              ))}
+            </div>
+          </section>
+        ) : null}
+
+        {results?.episodes.length ? (
+          <section className="search-section">
+            <h2>Епізоди</h2>
+            <div className="result-list">
+              {results.episodes.map((episode) => (
+                <Link key={episode.id} to={`/movies/${episode.seriesId}`}>
+                  <strong>{episode.title}</strong>
+                  <span>
+                    {episode.seriesTitle} · Сезон {episode.seasonNumber}, епізод {episode.episodeNumber}
+                  </span>
+                  <small>Рейтинг {formatRating(episode.averageRating)}</small>
+                </Link>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
+        {results?.people.length ? (
+          <section className="search-section">
+            <h2>Знаменитості</h2>
+            <div className="people-grid">
+              {results.people.map((person) => (
+                <article key={person.id}>
+                  <div className="person-photo">
+                    {person.photoUrl ? <img src={person.photoUrl} alt="" loading="lazy" /> : <span>{person.fullName.slice(0, 2).toUpperCase()}</span>}
+                  </div>
+                  <strong>{person.fullName}</strong>
+                  {person.birthPlace ? <small>{person.birthPlace}</small> : null}
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
+      </section>
+
+      <SiteFooter />
+    </main>
   );
 }
 
@@ -799,6 +1045,8 @@ function CatalogPage() {
           </div>
         ) : null}
       </section>
+
+      <SiteFooter />
     </main>
   );
 }
@@ -915,6 +1163,8 @@ function MovieDetailsPage() {
           </section>
         </section>
       ) : null}
+
+      <SiteFooter />
     </main>
   );
 }
