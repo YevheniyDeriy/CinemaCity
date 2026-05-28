@@ -377,7 +377,7 @@ function AuthPage({
     <main className="page-shell auth-page-shell">
       <SiteHeader />
 
-      <section className="auth-page-grid" aria-label="Сторінка автентифікації CinemaCity">
+      <section className={`auth-page-grid auth-page-grid--${mode}`} aria-label="Сторінка автентифікації CinemaCity">
         <div className="auth-poster" aria-hidden="true">
           <div>
             <p className="kicker">Особистий зал</p>
@@ -386,11 +386,16 @@ function AuthPage({
           </div>
         </div>
 
-        <section className="auth-surface" aria-label="Вхід в CinemaCity">
+        <section className={`auth-surface auth-surface--${mode}`} aria-label="Вхід в CinemaCity">
           <div>
             <p className="eyebrow">Ваш профіль</p>
             <h2>{mode === 'register' ? 'Створіть акаунт' : 'Увійдіть в акаунт'}</h2>
             <p className="auth-lead">{status}</p>
+            <p className="auth-mode-copy">
+              {mode === 'register'
+                ? 'Новий профіль для оцінок, списків перегляду та майбутніх рецензій.'
+                : 'Коротка форма для повернення до вашого профілю.'}
+            </p>
           </div>
 
           <div className="tabs" role="tablist" aria-label="Режим автентифікації">
@@ -411,7 +416,7 @@ function AuthPage({
           </div>
 
           {mode === 'register' ? (
-            <form className="auth-form" onSubmit={handleRegister}>
+            <form className="auth-form auth-form--register" onSubmit={handleRegister}>
               <label>
                 Ім’я в CinemaCity
                 <input value={username} onChange={(event) => setUsername(event.target.value)} />
@@ -432,12 +437,16 @@ function AuthPage({
                   type="password"
                 />
               </label>
+              <div className="register-hint">
+                <span>Після створення акаунта потрібно підтвердити пошту.</span>
+                <span>Пароль має містити щонайменше 8 символів.</span>
+              </div>
               <button className="primary-action" disabled={isBusy} type="submit">
                 Створити акаунт
               </button>
             </form>
           ) : (
-            <form className="auth-form" onSubmit={handleLogin}>
+            <form className="auth-form auth-form--login" onSubmit={handleLogin}>
               <label>
                 Електронна пошта
                 <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" />
