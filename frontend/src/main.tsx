@@ -1,5 +1,6 @@
 import React, { FormEvent, useEffect, useMemo, useState } from 'react';
 import ReactDOM from 'react-dom/client';
+import { BrowserRouter, Link, Navigate, Route, Routes } from 'react-router-dom';
 import './styles.css';
 
 const defaultApiUrl =
@@ -37,34 +38,33 @@ type SpotlightSlide = {
 
 const spotlightSlides: SpotlightSlide[] = [
   {
-    title: 'Премьеры недели',
-    meta: 'Новинки, трейлеры, первые оценки',
-    description: 'Собирайте фильмы, которые хочется посмотреть, и возвращайтесь к ним перед походом в кино.',
+    title: 'Прем’єри тижня',
+    meta: 'Новинки, трейлери, перші оцінки',
+    description: 'Великий екран для нових історій, гучних релізів і кадрів, які хочеться переглядати ще раз.',
     imageUrl: 'https://image.tmdb.org/t/p/original/8rpDcsfLJypbO6vREc0547VKqEv.jpg'
   },
   {
-    title: 'Фантастика на большом экране',
-    meta: 'Космос, неон, громкие релизы',
-    description: 'Лента CinemaCity помогает держать рядом яркие истории и не терять новые трейлеры.',
+    title: 'Фантастика на великому екрані',
+    meta: 'Космос, неон, далекі світи',
+    description: 'Добірка атмосферних фільмів і серіалів для вечора, коли хочеться втекти за межі звичного.',
     imageUrl: 'https://image.tmdb.org/t/p/original/p1F51Lvj3sMopG948F5HsBbl43C.jpg'
   },
   {
-    title: 'Вечерние сеансы',
-    meta: 'Драмы, триллеры, авторское кино',
-    description: 'Отмечайте ожидания, делитесь впечатлениями и находите настроение для следующего просмотра.',
+    title: 'Вечірні сеанси',
+    meta: 'Драми, трилери, авторське кіно',
+    description: 'Кадри для настрою: від тихих історій до напружених прем’єр, які лишаються після титрів.',
     imageUrl: 'https://image.tmdb.org/t/p/original/628Dep6AxEtDxjZoGP78TsOxYbK.jpg'
   },
   {
-    title: 'Большие истории',
-    meta: 'Биографии, события, разговоры после титров',
-    description: 'Сохраняйте громкие фильмы в профиль и возвращайтесь к ним, когда появится настроение.',
+    title: 'Великі історії',
+    meta: 'Біографії, події, розмови після титрів',
+    description: 'Фільми, які збирають зал, тримають увагу і стають приводом для довгих обговорень.',
     imageUrl: 'https://image.tmdb.org/t/p/original/rLb2cwF3Pazuxaj0sRXQ037tGI1.jpg'
   }
 ];
 
 function App() {
-  const [mode, setMode] = useState<'register' | 'login'>('register');
-  const [activeSlide, setActiveSlide] = useState(0);
+  const [mode, setMode] = useState<'register' | 'login'>('login');
   const [username, setUsername] = useState('cinefan');
   const [email, setEmail] = useState('cinefan@example.com');
   const [password, setPassword] = useState('Password123');
@@ -72,36 +72,27 @@ function App() {
   const [confirmationToken, setConfirmationToken] = useState('');
   const [accessToken, setAccessToken] = useState('');
   const [user, setUser] = useState<AuthUser | null>(null);
-  const [message, setMessage] = useState('Выберите фильм на вечер и войдите в свой зал.');
+  const [message, setMessage] = useState('Раді бачити вас у CinemaCity.');
   const [isBusy, setIsBusy] = useState(false);
 
-  const currentSlide = spotlightSlides[activeSlide];
   const googleLoginUrl = useMemo(() => {
     const returnUrl =
-      typeof window === 'undefined' ? '/' : `${window.location.origin}/?google=success`;
+      typeof window === 'undefined' ? '/auth' : `${window.location.origin}/auth?google=success`;
 
     return `${apiUrl}/api/auth/google?returnUrl=${encodeURIComponent(returnUrl)}`;
   }, []);
 
   const status = useMemo(() => {
     if (user) {
-      return `С возвращением, ${user.username}`;
+      return `Ви увійшли як ${user.username}`;
     }
 
     if (confirmationToken) {
-      return 'Осталось подтвердить почту';
+      return 'Залишилося підтвердити пошту';
     }
 
-    return 'Гость CinemaCity';
+    return 'Гість CinemaCity';
   }, [confirmationToken, user]);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      setActiveSlide((slide) => (slide + 1) % spotlightSlides.length);
-    }, 5200);
-
-    return () => window.clearInterval(timer);
-  }, []);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -110,7 +101,7 @@ function App() {
       return;
     }
 
-    window.history.replaceState({}, '', window.location.pathname);
+    window.history.replaceState({}, '', '/auth');
     setIsBusy(true);
 
     fetch(`${apiUrl}/api/auth/refresh`, {
@@ -124,7 +115,7 @@ function App() {
         const data = text ? JSON.parse(text) : null;
 
         if (!response.ok) {
-          throw new Error(data?.message ?? data?.detail ?? 'Не удалось открыть ваш профиль.');
+          throw new Error(data?.message ?? data?.detail ?? 'Не вдалося відкрити ваш профіль.');
         }
 
         return data as AuthResponse;
@@ -132,10 +123,10 @@ function App() {
       .then((result) => {
         setAccessToken(result.accessToken);
         setUser(result.user);
-        setMessage('Вход через Google завершен. Приятного просмотра.');
+        setMessage('Вхід через Google завершено. Приємного перегляду.');
       })
       .catch(() => {
-        setMessage('Google вернул вас в CinemaCity. Попробуйте войти еще раз.');
+        setMessage('Google повернув вас у CinemaCity. Спробуйте увійти ще раз.');
       })
       .finally(() => setIsBusy(false));
   }, []);
@@ -172,9 +163,9 @@ function App() {
       });
 
       setConfirmationToken(result.emailConfirmationToken);
-      setMessage('Аккаунт создан. Подтвердите почту кнопкой ниже и входите в свой зал.');
+      setMessage('Акаунт створено. Підтвердьте пошту кнопкою нижче, а потім увійдіть.');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Не получилось создать аккаунт.');
+      setMessage(error instanceof Error ? error.message : 'Не вдалося створити акаунт.');
     } finally {
       setIsBusy(false);
     }
@@ -182,7 +173,7 @@ function App() {
 
   async function handleConfirmEmail() {
     if (!confirmationToken) {
-      setMessage('Сначала создайте аккаунт.');
+      setMessage('Спочатку створіть акаунт.');
       return;
     }
 
@@ -196,9 +187,9 @@ function App() {
 
       setConfirmationToken('');
       setMode('login');
-      setMessage('Почта подтверждена. Теперь можно войти.');
+      setMessage('Пошту підтверджено. Тепер можна увійти.');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Не получилось подтвердить почту.');
+      setMessage(error instanceof Error ? error.message : 'Не вдалося підтвердити пошту.');
     } finally {
       setIsBusy(false);
     }
@@ -216,9 +207,9 @@ function App() {
 
       setAccessToken(result.accessToken);
       setUser(result.user);
-      setMessage('Вы вошли в CinemaCity. Самое время выбрать фильм.');
+      setMessage('Ви увійшли в CinemaCity.');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Не получилось войти.');
+      setMessage(error instanceof Error ? error.message : 'Не вдалося увійти.');
     } finally {
       setIsBusy(false);
     }
@@ -235,9 +226,9 @@ function App() {
 
       setAccessToken(result.accessToken);
       setUser(result.user);
-      setMessage('Ваш сеанс продлен. Можно продолжать смотреть.');
+      setMessage('Ваш вхід оновлено.');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Не получилось продлить сеанс.');
+      setMessage(error instanceof Error ? error.message : 'Не вдалося оновити вхід.');
     } finally {
       setIsBusy(false);
     }
@@ -254,13 +245,63 @@ function App() {
 
       setAccessToken('');
       setUser(null);
-      setMessage('Вы вышли из аккаунта. Возвращайтесь за новым фильмом.');
+      setMessage('Ви вийшли з акаунта.');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Не получилось выйти.');
+      setMessage(error instanceof Error ? error.message : 'Не вдалося вийти.');
     } finally {
       setIsBusy(false);
     }
   }
+
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<HomePage />} />
+        <Route
+          path="/auth"
+          element={
+            <AuthPage
+              confirmPassword={confirmPassword}
+              confirmationToken={confirmationToken}
+              email={email}
+              googleLoginUrl={googleLoginUrl}
+              handleConfirmEmail={handleConfirmEmail}
+              handleLogin={handleLogin}
+              handleLogout={handleLogout}
+              handleRefresh={handleRefresh}
+              handleRegister={handleRegister}
+              isBusy={isBusy}
+              message={message}
+              mode={mode}
+              password={password}
+              setConfirmPassword={setConfirmPassword}
+              setEmail={setEmail}
+              setMode={setMode}
+              setPassword={setPassword}
+              setUsername={setUsername}
+              status={status}
+              user={user}
+              username={username}
+            />
+          }
+        />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </BrowserRouter>
+  );
+}
+
+function HomePage() {
+  const [activeSlide, setActiveSlide] = useState(0);
+  const currentSlide = spotlightSlides[activeSlide];
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setActiveSlide((slide) => (slide + 1) % spotlightSlides.length);
+    }, 5200);
+
+    return () => window.clearInterval(timer);
+  }, []);
 
   function goToSlide(slide: number) {
     setActiveSlide((slide + spotlightSlides.length) % spotlightSlides.length);
@@ -268,82 +309,137 @@ function App() {
 
   return (
     <main className="page-shell">
-      <header className="site-header" aria-label="Главное меню">
-        <a className="brand-row" href="/">
-          <span className="brand-mark">CC</span>
-          <span>CinemaCity</span>
-        </a>
-        <nav>
-          <a href="#spotlight">Премьеры</a>
-          <a href="#auth">Вход</a>
-        </nav>
-      </header>
+      <SiteHeader />
 
-      <section className="home-grid" id="spotlight" aria-label="Главная страница CinemaCity">
+      <section className="home-stage" id="spotlight" aria-label="Головна сторінка CinemaCity">
         <div className="spotlight" style={{ backgroundImage: `url(${currentSlide.imageUrl})` }}>
           <div className="spotlight-overlay">
-            <p className="kicker">Кинолента CinemaCity</p>
+            <p className="kicker">Кінолента CinemaCity</p>
             <h1>{currentSlide.title}</h1>
             <p className="spotlight-meta">{currentSlide.meta}</p>
             <p className="spotlight-text">{currentSlide.description}</p>
 
-            <div className="spotlight-controls" aria-label="Управление баннером">
-              <button type="button" aria-label="Предыдущий баннер" onClick={() => goToSlide(activeSlide - 1)}>
+            <div className="spotlight-controls" aria-label="Керування банером">
+              <button type="button" aria-label="Попередній банер" onClick={() => goToSlide(activeSlide - 1)}>
                 ‹
               </button>
-              <button type="button" aria-label="Следующий баннер" onClick={() => goToSlide(activeSlide + 1)}>
+              <button type="button" aria-label="Наступний банер" onClick={() => goToSlide(activeSlide + 1)}>
                 ›
               </button>
             </div>
           </div>
 
-          <div className="poster-rail" aria-label="Кадры фильмов">
+          <div className="poster-rail" aria-label="Кадри фільмів">
             {spotlightSlides.map((slide, index) => (
               <button
                 className={index === activeSlide ? 'active' : ''}
                 key={slide.title}
                 type="button"
                 onClick={() => goToSlide(index)}
-                aria-label={`Показать: ${slide.title}`}
+                aria-label={`Показати: ${slide.title}`}
               >
                 <img src={slide.imageUrl} alt="" loading={index === 0 ? 'eager' : 'lazy'} />
               </button>
             ))}
           </div>
         </div>
+      </section>
+    </main>
+  );
+}
 
-        <section className="auth-surface" id="auth" aria-label="Вход в CinemaCity">
+type AuthPageProps = {
+  confirmPassword: string;
+  confirmationToken: string;
+  email: string;
+  googleLoginUrl: string;
+  handleConfirmEmail: () => Promise<void>;
+  handleLogin: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  handleLogout: () => Promise<void>;
+  handleRefresh: () => Promise<void>;
+  handleRegister: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  isBusy: boolean;
+  message: string;
+  mode: 'register' | 'login';
+  password: string;
+  setConfirmPassword: (value: string) => void;
+  setEmail: (value: string) => void;
+  setMode: (value: 'register' | 'login') => void;
+  setPassword: (value: string) => void;
+  setUsername: (value: string) => void;
+  status: string;
+  user: AuthUser | null;
+  username: string;
+};
+
+function AuthPage({
+  confirmPassword,
+  confirmationToken,
+  email,
+  googleLoginUrl,
+  handleConfirmEmail,
+  handleLogin,
+  handleLogout,
+  handleRefresh,
+  handleRegister,
+  isBusy,
+  message,
+  mode,
+  password,
+  setConfirmPassword,
+  setEmail,
+  setMode,
+  setPassword,
+  setUsername,
+  status,
+  user,
+  username
+}: AuthPageProps) {
+  return (
+    <main className="page-shell auth-page-shell">
+      <SiteHeader />
+
+      <section className="auth-page-grid" aria-label="Сторінка автентифікації CinemaCity">
+        <div className="auth-poster" aria-hidden="true">
           <div>
-            <p className="eyebrow">Ваш профиль</p>
-            <h2>Войдите, чтобы сохранить фильмы</h2>
+            <p className="kicker">Особистий зал</p>
+            <h1>Поверніться до своїх фільмів</h1>
+            <p className="spotlight-text">Профіль збере майбутні перегляди, оцінки та списки, щойно каталог буде готовий.</p>
+          </div>
+        </div>
+
+        <section className="auth-surface" aria-label="Вхід в CinemaCity">
+          <div>
+            <p className="eyebrow">Ваш профіль</p>
+            <h2>{mode === 'register' ? 'Створіть акаунт' : 'Увійдіть в акаунт'}</h2>
             <p className="auth-lead">{status}</p>
           </div>
 
-          <div className="tabs" role="tablist" aria-label="Режим входа">
-            <button
-              className={mode === 'register' ? 'active' : ''}
-              type="button"
-              onClick={() => setMode('register')}
-            >
-              Регистрация
-            </button>
+          <div className="tabs" role="tablist" aria-label="Режим автентифікації">
             <button
               className={mode === 'login' ? 'active' : ''}
               type="button"
               onClick={() => setMode('login')}
             >
-              Вход
+              Вхід
+            </button>
+            <button
+              className={mode === 'register' ? 'active' : ''}
+              type="button"
+              onClick={() => setMode('register')}
+            >
+              Реєстрація
             </button>
           </div>
 
           {mode === 'register' ? (
             <form className="auth-form" onSubmit={handleRegister}>
               <label>
-                Имя в CinemaCity
+                Ім’я в CinemaCity
                 <input value={username} onChange={(event) => setUsername(event.target.value)} />
               </label>
               <label>
-                Почта
+                Електронна пошта
                 <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" />
               </label>
               <label>
@@ -351,7 +447,7 @@ function App() {
                 <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" />
               </label>
               <label>
-                Повторите пароль
+                Повторіть пароль
                 <input
                   value={confirmPassword}
                   onChange={(event) => setConfirmPassword(event.target.value)}
@@ -359,13 +455,13 @@ function App() {
                 />
               </label>
               <button className="primary-action" disabled={isBusy} type="submit">
-                Создать аккаунт
+                Створити акаунт
               </button>
             </form>
           ) : (
             <form className="auth-form" onSubmit={handleLogin}>
               <label>
-                Почта
+                Електронна пошта
                 <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" />
               </label>
               <label>
@@ -373,25 +469,25 @@ function App() {
                 <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" />
               </label>
               <button className="primary-action" disabled={isBusy} type="submit">
-                Войти
+                Увійти
               </button>
             </form>
           )}
 
           <div className="action-row">
             <button disabled={isBusy || !confirmationToken} type="button" onClick={handleConfirmEmail}>
-              Подтвердить почту
+              Підтвердити пошту
             </button>
             <button disabled={isBusy || !user} type="button" onClick={handleRefresh}>
-              Продлить сеанс
+              Оновити вхід
             </button>
             <button disabled={isBusy || !user} type="button" onClick={handleLogout}>
-              Выйти
+              Вийти
             </button>
           </div>
 
           <a className="google-link" href={googleLoginUrl}>
-            Войти через Google
+            Увійти через Google
           </a>
 
           <output className="message" aria-live="polite">
@@ -413,31 +509,46 @@ function App() {
   );
 }
 
+function SiteHeader() {
+  return (
+    <header className="site-header" aria-label="Головне меню">
+      <Link className="brand-row" to="/">
+        <span className="brand-mark">CC</span>
+        <span>CinemaCity</span>
+      </Link>
+      <nav>
+        <Link to="/">Головна</Link>
+        <Link to="/auth">Увійти</Link>
+      </nav>
+    </header>
+  );
+}
+
 function toFriendlyMessage(message?: string) {
   switch (message) {
     case 'Username must be between 3 and 30 characters.':
-      return 'Имя должно быть от 3 до 30 символов.';
+      return 'Ім’я має бути від 3 до 30 символів.';
     case 'Email format is invalid.':
-      return 'Проверьте почту: адрес выглядит неверно.';
+      return 'Перевірте електронну пошту: адреса виглядає неправильно.';
     case 'Password must contain at least 8 characters.':
-      return 'Пароль должен быть не короче 8 символов.';
+      return 'Пароль має містити щонайменше 8 символів.';
     case 'Password confirmation does not match.':
-      return 'Пароли не совпадают.';
+      return 'Паролі не збігаються.';
     case 'Username is already taken.':
-      return 'Это имя уже занято.';
+      return 'Це ім’я вже зайняте.';
     case 'Email is already registered.':
-      return 'Эта почта уже зарегистрирована.';
+      return 'Ця пошта вже зареєстрована.';
     case 'Email confirmation token is invalid or expired.':
     case 'Email confirmation token is invalid.':
-      return 'Подтверждение почты устарело. Создайте аккаунт еще раз.';
+      return 'Підтвердження пошти застаріло. Створіть акаунт ще раз.';
     case 'User was not found.':
-      return 'Аккаунт не найден.';
+      return 'Акаунт не знайдено.';
     case 'Account is temporarily locked.':
-      return 'Аккаунт временно закрыт после нескольких попыток входа.';
+      return 'Акаунт тимчасово заблоковано після кількох спроб входу.';
     case 'Email must be confirmed before login.':
-      return 'Сначала подтвердите почту.';
+      return 'Спочатку підтвердьте пошту.';
     default:
-      return message || 'Что-то пошло не так. Попробуйте еще раз.';
+      return message || 'Щось пішло не так. Спробуйте ще раз.';
   }
 }
 

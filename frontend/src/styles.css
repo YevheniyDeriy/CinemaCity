@@ -81,19 +81,16 @@ nav a {
   background: rgba(255, 255, 255, 0.06);
 }
 
-.home-grid {
+.home-stage {
   width: min(1240px, 100%);
   min-height: calc(100vh - 108px);
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(360px, 0.38fr);
-  gap: 22px;
-  align-items: start;
   margin: 0 auto;
 }
 
 .spotlight {
-  height: min(620px, calc(100vh - 108px));
-  min-height: min(620px, calc(100vh - 108px));
+  width: 100%;
+  height: min(680px, calc(100vh - 108px));
+  min-height: 560px;
   position: relative;
   overflow: hidden;
   border-radius: 8px;
@@ -102,7 +99,8 @@ nav a {
   box-shadow: 0 28px 80px rgba(0, 0, 0, 0.35);
 }
 
-.spotlight::before {
+.spotlight::before,
+.auth-poster::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -119,7 +117,7 @@ nav a {
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
-  padding: 44px;
+  padding: 48px;
 }
 
 .kicker,
@@ -140,7 +138,7 @@ p {
 
 h1 {
   max-width: 720px;
-  font-size: 56px;
+  font-size: 58px;
   line-height: 0.98;
   letter-spacing: 0;
 }
@@ -203,7 +201,7 @@ button:disabled {
   position: absolute;
   right: 24px;
   bottom: 24px;
-  left: 44px;
+  left: 48px;
   z-index: 2;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -211,7 +209,7 @@ button:disabled {
 }
 
 .poster-rail button {
-  height: 92px;
+  height: 96px;
   padding: 0;
   overflow: hidden;
   border: 2px solid transparent;
@@ -229,15 +227,48 @@ button:disabled {
   object-fit: cover;
 }
 
+.auth-page-shell {
+  display: flex;
+  flex-direction: column;
+}
+
+.auth-page-grid {
+  width: min(1120px, 100%);
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(360px, 0.72fr);
+  gap: 22px;
+  align-items: stretch;
+  margin: 0 auto;
+}
+
+.auth-poster {
+  min-height: 680px;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: flex-end;
+  border-radius: 8px;
+  background:
+    linear-gradient(rgba(6, 8, 13, 0.1), rgba(6, 8, 13, 0.1)),
+    url("https://image.tmdb.org/t/p/original/628Dep6AxEtDxjZoGP78TsOxYbK.jpg") center / cover;
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.35);
+}
+
+.auth-poster > div {
+  position: relative;
+  z-index: 1;
+  padding: 44px;
+}
+
 .auth-surface {
-  min-height: min(620px, calc(100vh - 108px));
+  min-height: 680px;
   display: flex;
   flex-direction: column;
   gap: 18px;
   padding: 28px;
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.11);
-  background: rgba(14, 17, 24, 0.86);
+  background: rgba(14, 17, 24, 0.88);
   box-shadow: 0 28px 80px rgba(0, 0, 0, 0.28);
   backdrop-filter: blur(18px);
 }
@@ -375,17 +406,20 @@ input:focus {
 }
 
 @media (max-width: 980px) {
-  .home-grid {
+  .auth-page-grid {
     grid-template-columns: 1fr;
   }
 
-  .spotlight,
+  .auth-poster,
   .auth-surface {
     min-height: auto;
   }
 
+  .auth-poster {
+    min-height: 420px;
+  }
+
   .spotlight-overlay {
-    min-height: 560px;
     padding: 38px;
   }
 
@@ -412,8 +446,11 @@ input:focus {
     flex: 1;
   }
 
+  .spotlight {
+    min-height: 620px;
+  }
+
   .spotlight-overlay {
-    min-height: 560px;
     padding: 28px;
   }
 
@@ -431,6 +468,7 @@ input:focus {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .auth-poster > div,
   .auth-surface {
     padding: 20px;
   }
