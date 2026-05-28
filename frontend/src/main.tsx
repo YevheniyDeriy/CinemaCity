@@ -215,25 +215,6 @@ function App() {
     }
   }
 
-  async function handleRefresh() {
-    setIsBusy(true);
-
-    try {
-      const result = await request<AuthResponse>('/api/auth/refresh', {
-        method: 'POST',
-        body: JSON.stringify({})
-      });
-
-      setAccessToken(result.accessToken);
-      setUser(result.user);
-      setMessage('Ваш вхід оновлено.');
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Не вдалося оновити вхід.');
-    } finally {
-      setIsBusy(false);
-    }
-  }
-
   async function handleLogout() {
     setIsBusy(true);
 
@@ -268,7 +249,6 @@ function App() {
               handleConfirmEmail={handleConfirmEmail}
               handleLogin={handleLogin}
               handleLogout={handleLogout}
-              handleRefresh={handleRefresh}
               handleRegister={handleRegister}
               isBusy={isBusy}
               message={message}
@@ -356,7 +336,6 @@ type AuthPageProps = {
   handleConfirmEmail: () => Promise<void>;
   handleLogin: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   handleLogout: () => Promise<void>;
-  handleRefresh: () => Promise<void>;
   handleRegister: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   isBusy: boolean;
   message: string;
@@ -380,7 +359,6 @@ function AuthPage({
   handleConfirmEmail,
   handleLogin,
   handleLogout,
-  handleRefresh,
   handleRegister,
   isBusy,
   message,
@@ -474,17 +452,14 @@ function AuthPage({
             </form>
           )}
 
-          <div className="action-row">
-            <button disabled={isBusy || !confirmationToken} type="button" onClick={handleConfirmEmail}>
-              Підтвердити пошту
-            </button>
-            <button disabled={isBusy || !user} type="button" onClick={handleRefresh}>
-              Оновити вхід
-            </button>
-            <button disabled={isBusy || !user} type="button" onClick={handleLogout}>
-              Вийти
-            </button>
-          </div>
+          {confirmationToken ? (
+            <div className="confirm-strip">
+              <p>Акаунт створено. Підтвердьте пошту, щоб перейти до входу.</p>
+              <button disabled={isBusy} type="button" onClick={handleConfirmEmail}>
+                Підтвердити пошту
+              </button>
+            </div>
+          ) : null}
 
           <a className="google-link" href={googleLoginUrl}>
             Увійти через Google
@@ -501,6 +476,9 @@ function AuthPage({
                 <strong>{user.username}</strong>
                 <small>{user.email}</small>
               </div>
+              <button disabled={isBusy} type="button" onClick={handleLogout}>
+                Вийти
+              </button>
             </div>
           ) : null}
         </section>
