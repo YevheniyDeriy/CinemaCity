@@ -1,6 +1,6 @@
 import React, { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import ReactDOM from 'react-dom/client';
-import { BrowserRouter, Link, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Link, Navigate, Route, Routes, useParams } from 'react-router-dom';
 import './styles.css';
 
 const defaultApiUrl =
@@ -34,6 +34,49 @@ type SpotlightSlide = {
   meta: string;
   description: string;
   imageUrl: string;
+};
+
+type Genre = {
+  id: number;
+  name: string;
+  slug: string;
+};
+
+type MovieCard = {
+  id: string;
+  title: string;
+  originalTitle?: string | null;
+  contentType: number | string;
+  releaseYear: number;
+  posterUrl?: string | null;
+  backdropUrl?: string | null;
+  averageRating: number;
+  ratingsCount: number;
+  genres: Genre[];
+};
+
+type MovieDetails = MovieCard & {
+  duration?: number | null;
+  description?: string | null;
+  trailerYoutubeId?: string | null;
+  countries: Array<{ id: number; name: string; code?: string | null }>;
+  languages: Array<{ id: number; name: string; code?: string | null }>;
+  cast: Array<{
+    id: string;
+    personId: string;
+    fullName: string;
+    photoUrl?: string | null;
+    creditType: number | string;
+    roleName?: string | null;
+    sortOrder: number;
+  }>;
+};
+
+type PagedResult<T> = {
+  items: T[];
+  page: number;
+  pageSize: number;
+  total: number;
 };
 
 const spotlightSlides: SpotlightSlide[] = [
@@ -248,6 +291,8 @@ function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<HomePage />} />
+        <Route path="/catalog" element={<CatalogPage />} />
+        <Route path="/movies/:id" element={<MovieDetailsPage />} />
         <Route
           path="/auth"
           element={
@@ -580,10 +625,348 @@ function SiteHeader() {
       </Link>
       <nav>
         <Link to="/">Головна</Link>
+        <Link to="/catalog">Каталог</Link>
         <Link to="/auth">Увійти</Link>
       </nav>
     </header>
   );
+}
+
+function CatalogPage() {
+  const [movies, setMovies] = useState<PagedResult<MovieCard> | null>(null);
+  const [genres, setGenres] = useState<Genre[]>([]);
+  const [query, setQuery] = useState('');
+  const [genre, setGenre] = useState('');
+  const [contentType, setContentType] = useState('');
+  const [sort, setSort] = useState('rating');
+  const [yearFrom, setYearFrom] = useState('');
+  const [ratingMin, setRatingMin] = useState('');
+  const [page, setPage] = useState(1);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    fetch(`${apiUrl}/api/genres`)
+      .then((response) => (response.ok ? response.json() : []))
+      .then((data: Genre[]) => setGenres(data))
+      .catch(() => setGenres([]));
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const params = new URLSearchParams({
+      page: page.toString(),
+      pageSize: '12',
+      sort
+    });
+
+    if (query.trim()) params.set('q', query.trim());
+    if (genre) params.set('genre', genre);
+    if (contentType) params.set('contentType', contentType);
+    if (yearFrom) params.set('yearFrom', yearFrom);
+    if (ratingMin) params.set('ratingMin', ratingMin);
+
+    setIsLoading(true);
+    setError('');
+
+    fetch(`${apiUrl}/api/movies?${params}`, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error('Не вдалося завантажити каталог.');
+        }
+
+        return (await response.json()) as PagedResult<MovieCard>;
+      })
+      .then(setMovies)
+      .catch((fetchError) => {
+        if (fetchError instanceof DOMException && fetchError.name === 'AbortError') {
+          return;
+        }
+
+        setError(fetchError instanceof TypeError ? 'Каталог тимчасово недоступний. Спробуйте оновити сторінку пізніше.' : fetchError instanceof Error ? fetchError.message : 'Не вдалося завантажити каталог.');
+      })
+      .finally(() => setIsLoading(false));
+
+    return () => controller.abort();
+  }, [contentType, genre, page, query, ratingMin, sort, yearFrom]);
+
+  const pageCount = movies ? Math.max(Math.ceil(movies.total / movies.pageSize), 1) : 1;
+
+  function resetPage(update: () => void) {
+    setPage(1);
+    update();
+  }
+
+  return (
+    <main className="page-shell">
+      <SiteHeader />
+
+      <section className="catalog-shell" aria-label="Каталог фільмів">
+        <div className="catalog-heading">
+          <p className="kicker">Каталог CinemaCity</p>
+          <h1>Фільми та серіали</h1>
+          <p>Шукайте за назвою, фільтруйте за жанром, роком, рейтингом і типом контенту.</p>
+        </div>
+
+        <div className="catalog-filters" aria-label="Фільтри каталогу">
+          <label>
+            Пошук
+            <input
+              value={query}
+              onChange={(event) => resetPage(() => setQuery(event.target.value))}
+              placeholder="Назва фільму або серіалу"
+            />
+          </label>
+          <label>
+            Жанр
+            <select value={genre} onChange={(event) => resetPage(() => setGenre(event.target.value))}>
+              <option value="">Усі жанри</option>
+              {genres.map((item) => (
+                <option key={item.id} value={item.slug}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Тип
+            <select value={contentType} onChange={(event) => resetPage(() => setContentType(event.target.value))}>
+              <option value="">Усе</option>
+              <option value="Movie">Фільми</option>
+              <option value="Series">Серіали</option>
+            </select>
+          </label>
+          <label>
+            Рік від
+            <input
+              min="1888"
+              value={yearFrom}
+              onChange={(event) => resetPage(() => setYearFrom(event.target.value))}
+              placeholder="2010"
+              type="number"
+            />
+          </label>
+          <label>
+            Рейтинг від
+            <input
+              max="10"
+              min="1"
+              step="0.1"
+              value={ratingMin}
+              onChange={(event) => resetPage(() => setRatingMin(event.target.value))}
+              placeholder="7.5"
+              type="number"
+            />
+          </label>
+          <label>
+            Сортування
+            <select value={sort} onChange={(event) => resetPage(() => setSort(event.target.value))}>
+              <option value="rating">За рейтингом</option>
+              <option value="year">За роком</option>
+              <option value="title">За назвою</option>
+              <option value="newest">Нові додані</option>
+            </select>
+          </label>
+        </div>
+
+        {error ? <p className="catalog-message">{error}</p> : null}
+        {isLoading ? <p className="catalog-message">Завантаження каталогу...</p> : null}
+
+        {!isLoading && movies?.items.length === 0 ? (
+          <div className="empty-state">
+            <h2>Каталог поки порожній</h2>
+            <p>Додайте фільми в адмінському розділі або змініть фільтри.</p>
+          </div>
+        ) : null}
+
+        <div className="movie-grid">
+          {movies?.items.map((movie) => (
+            <MovieCardLink key={movie.id} movie={movie} />
+          ))}
+        </div>
+
+        {movies && movies.total > movies.pageSize ? (
+          <div className="pagination">
+            <button disabled={page <= 1} type="button" onClick={() => setPage((current) => Math.max(current - 1, 1))}>
+              Назад
+            </button>
+            <span>
+              Сторінка {page} з {pageCount}
+            </span>
+            <button disabled={page >= pageCount} type="button" onClick={() => setPage((current) => current + 1)}>
+              Далі
+            </button>
+          </div>
+        ) : null}
+      </section>
+    </main>
+  );
+}
+
+function MovieDetailsPage() {
+  const { id } = useParams();
+  const [movie, setMovie] = useState<MovieDetails | null>(null);
+  const [similar, setSimilar] = useState<MovieCard[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!id) {
+      return;
+    }
+
+    const controller = new AbortController();
+    setIsLoading(true);
+    setError('');
+
+    Promise.all([
+      fetch(`${apiUrl}/api/movies/${id}`, { signal: controller.signal }).then(async (response) => {
+        if (!response.ok) throw new Error('Фільм не знайдено.');
+        return (await response.json()) as MovieDetails;
+      }),
+      fetch(`${apiUrl}/api/movies/${id}/similar`, { signal: controller.signal }).then(async (response) => {
+        if (!response.ok) return [];
+        return (await response.json()) as MovieCard[];
+      })
+    ])
+      .then(([movieResult, similarResult]) => {
+        setMovie(movieResult);
+        setSimilar(similarResult);
+      })
+      .catch((fetchError) => {
+        if (fetchError instanceof DOMException && fetchError.name === 'AbortError') {
+          return;
+        }
+
+        setError(fetchError instanceof TypeError ? 'Сторінка фільму тимчасово недоступна. Спробуйте оновити її пізніше.' : fetchError instanceof Error ? fetchError.message : 'Не вдалося відкрити сторінку фільму.');
+      })
+      .finally(() => setIsLoading(false));
+
+    return () => controller.abort();
+  }, [id]);
+
+  return (
+    <main className="page-shell">
+      <SiteHeader />
+
+      {isLoading ? <p className="catalog-message">Завантаження фільму...</p> : null}
+      {error ? <p className="catalog-message">{error}</p> : null}
+
+      {movie ? (
+        <section className="movie-details">
+          <div className="movie-backdrop" style={{ backgroundImage: `url(${movie.backdropUrl || movie.posterUrl || ''})` }}>
+            <div>
+              <p className="kicker">{formatContentType(movie.contentType)}</p>
+              <h1>{movie.title}</h1>
+              <p>{movie.description || 'Опис для цього фільму ще не додано.'}</p>
+              <div className="movie-facts">
+                <span>{movie.releaseYear}</span>
+                {movie.duration ? <span>{movie.duration} хв</span> : null}
+                <span>Рейтинг {formatRating(movie.averageRating)}</span>
+                <span>{movie.ratingsCount} оцінок</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="details-grid">
+            <section>
+              <h2>Деталі</h2>
+              <TagList title="Жанри" items={movie.genres.map((item) => item.name)} />
+              <TagList title="Країни" items={movie.countries.map((item) => item.name)} />
+              <TagList title="Мови" items={movie.languages.map((item) => item.name)} />
+              {movie.trailerYoutubeId ? (
+                <a className="trailer-link" href={`https://www.youtube.com/watch?v=${movie.trailerYoutubeId}`}>
+                  Дивитися трейлер
+                </a>
+              ) : null}
+            </section>
+
+            <section>
+              <h2>Акторський склад</h2>
+              {movie.cast.length ? (
+                <div className="cast-list">
+                  {movie.cast.map((cast) => (
+                    <div key={cast.id}>
+                      <strong>{cast.fullName}</strong>
+                      <span>
+                        {formatCreditType(cast.creditType)}
+                        {cast.roleName ? ` · ${cast.roleName}` : ''}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="muted-text">Склад ще не додано.</p>
+              )}
+            </section>
+          </div>
+
+          <section className="similar-section">
+            <h2>Схожі фільми</h2>
+            {similar.length ? (
+              <div className="movie-grid compact">
+                {similar.map((item) => (
+                  <MovieCardLink key={item.id} movie={item} />
+                ))}
+              </div>
+            ) : (
+              <p className="muted-text">Рекомендації з’являться, коли в каталозі буде більше фільмів зі схожими жанрами.</p>
+            )}
+          </section>
+        </section>
+      ) : null}
+    </main>
+  );
+}
+
+function MovieCardLink({ movie }: { movie: MovieCard }) {
+  return (
+    <Link className="movie-card" to={`/movies/${movie.id}`}>
+      <div className="movie-card-media">
+        {movie.posterUrl || movie.backdropUrl ? (
+          <img src={movie.posterUrl || movie.backdropUrl || ''} alt="" loading="lazy" />
+        ) : (
+          <span>{movie.title.slice(0, 2).toUpperCase()}</span>
+        )}
+      </div>
+      <div className="movie-card-body">
+        <span>{formatContentType(movie.contentType)} · {movie.releaseYear}</span>
+        <h3>{movie.title}</h3>
+        <p>Рейтинг {formatRating(movie.averageRating)} · {movie.ratingsCount} оцінок</p>
+        <div>
+          {movie.genres.slice(0, 3).map((genre) => (
+            <small key={genre.id}>{genre.name}</small>
+          ))}
+        </div>
+      </div>
+    </Link>
+  );
+}
+
+function TagList({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div className="tag-row">
+      <strong>{title}</strong>
+      <div>
+        {items.length ? items.map((item) => <span key={item}>{item}</span>) : <span>Не вказано</span>}
+      </div>
+    </div>
+  );
+}
+
+function formatRating(value: number) {
+  return Number(value || 0).toFixed(1);
+}
+
+function formatContentType(value: number | string) {
+  return value === 1 || value === 'Series' ? 'Серіал' : 'Фільм';
+}
+
+function formatCreditType(value: number | string) {
+  if (value === 1 || value === 'Director') return 'Режисер';
+  if (value === 2 || value === 'Writer') return 'Сценарист';
+  if (value === 3 || value === 'Producer') return 'Продюсер';
+  return 'Актор';
 }
 
 function toFriendlyMessage(message?: string) {

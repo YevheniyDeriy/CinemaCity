@@ -1,4 +1,5 @@
 using System.Text;
+using CinemaCity.Domain.Enums;
 using CinemaCity.Domain.Entities;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.Google;
@@ -54,7 +55,10 @@ public static class AuthSetup
                 options.CallbackPath = configuration["Google:CallbackPath"] ?? "/api/auth/google/callback";
             });
 
-        services.AddAuthorization();
+        services.AddAuthorization(options =>
+        {
+            options.AddPolicy("AdminOnly", policy => policy.RequireRole(UserRole.Admin.ToString()));
+        });
 
         return services;
     }

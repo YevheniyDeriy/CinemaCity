@@ -1,4 +1,5 @@
 using CinemaCity.API.Auth;
+using CinemaCity.API.Movies;
 using CinemaCity.Application;
 using CinemaCity.Infrastructure;
 using CinemaCity.Infrastructure.Data;
@@ -14,7 +15,7 @@ builder.Services.AddCors(options =>
     options.AddPolicy("Frontend", policy =>
     {
         policy
-            .WithOrigins("http://localhost:5173", "http://127.0.0.1:5173")
+            .WithOrigins("http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:5174", "http://127.0.0.1:5174")
             .AllowAnyHeader()
             .AllowAnyMethod()
             .AllowCredentials();
@@ -54,31 +55,7 @@ app.MapGet("/health/database", async (AppDbContext dbContext, CancellationToken 
 })
 .WithName("DatabaseHealth");
 
-app.MapGet("/api/movies", async (AppDbContext dbContext, CancellationToken cancellationToken) =>
-{
-    var movies = await dbContext.Movies
-        .AsNoTracking()
-        .Where(movie => !movie.IsDeleted)
-        .OrderByDescending(movie => movie.AverageRating)
-        .ThenByDescending(movie => movie.RatingsCount)
-        .Select(movie => new
-        {
-            movie.Id,
-            movie.Title,
-            movie.OriginalTitle,
-            movie.ContentType,
-            movie.ReleaseYear,
-            movie.PosterUrl,
-            movie.AverageRating,
-            movie.RatingsCount
-        })
-        .Take(20)
-        .ToListAsync(cancellationToken);
-
-    return Results.Ok(movies);
-})
-.WithName("GetMovies");
-
 app.MapAuthEndpoints();
+app.MapMovieEndpoints();
 
 app.Run();
