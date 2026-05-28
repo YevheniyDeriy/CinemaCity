@@ -241,11 +241,13 @@ button:disabled {
 }
 
 .auth-page-grid--login {
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 360px);
+  width: min(980px, 100%);
+  grid-template-columns: minmax(0, 1fr) 340px;
 }
 
 .auth-page-grid--register {
-  grid-template-columns: minmax(0, 0.9fr) minmax(420px, 500px);
+  width: min(1180px, 100%);
+  grid-template-columns: minmax(0, 0.86fr) minmax(520px, 560px);
 }
 
 .auth-poster {
@@ -283,9 +285,13 @@ button:disabled {
 .auth-surface--login {
   align-self: center;
   border-color: rgba(142, 225, 207, 0.2);
+  padding: 18px;
+  gap: 12px;
 }
 
 .auth-surface--register {
+  padding: 24px;
+  gap: 16px;
   border-color: rgba(255, 215, 111, 0.2);
   background:
     linear-gradient(135deg, rgba(255, 215, 111, 0.08), transparent 42%),
@@ -370,6 +376,10 @@ input {
   color: #f8fafc;
   background: rgba(255, 255, 255, 0.07);
   padding: 0 14px;
+}
+
+input::placeholder {
+  color: #697387;
 }
 
 input:focus {

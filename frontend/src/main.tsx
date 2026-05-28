@@ -65,10 +65,10 @@ const spotlightSlides: SpotlightSlide[] = [
 
 function App() {
   const [mode, setMode] = useState<'register' | 'login'>('login');
-  const [username, setUsername] = useState('cinefan');
-  const [email, setEmail] = useState('cinefan@example.com');
-  const [password, setPassword] = useState('Password123');
-  const [confirmPassword, setConfirmPassword] = useState('Password123');
+  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [confirmationToken, setConfirmationToken] = useState('');
   const [accessToken, setAccessToken] = useState('');
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -419,21 +419,36 @@ function AuthPage({
             <form className="auth-form auth-form--register" onSubmit={handleRegister}>
               <label>
                 Ім’я в CinemaCity
-                <input value={username} onChange={(event) => setUsername(event.target.value)} />
+                <input
+                  value={username}
+                  onChange={(event) => setUsername(event.target.value)}
+                  placeholder="Ваше ім’я"
+                />
               </label>
               <label>
                 Електронна пошта
-                <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" />
+                <input
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  placeholder="Ваша пошта"
+                  type="email"
+                />
               </label>
               <label>
                 Пароль
-                <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" />
+                <input
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  placeholder="Ваш пароль"
+                  type="password"
+                />
               </label>
               <label>
                 Повторіть пароль
                 <input
                   value={confirmPassword}
                   onChange={(event) => setConfirmPassword(event.target.value)}
+                  placeholder="Повторіть пароль"
                   type="password"
                 />
               </label>
@@ -449,11 +464,21 @@ function AuthPage({
             <form className="auth-form auth-form--login" onSubmit={handleLogin}>
               <label>
                 Електронна пошта
-                <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" />
+                <input
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  placeholder="Ваша пошта"
+                  type="email"
+                />
               </label>
               <label>
                 Пароль
-                <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" />
+                <input
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  placeholder="Ваш пароль"
+                  type="password"
+                />
               </label>
               <button className="primary-action" disabled={isBusy} type="submit">
                 Увійти
