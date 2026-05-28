@@ -63,4 +63,6 @@ app.MapGet("/api/movies", async (AppDbContext dbContext, CancellationToken cance
 })
 .WithName("GetMovies");
 
+app.MapAuthEndpoints();
+
 app.Run();
