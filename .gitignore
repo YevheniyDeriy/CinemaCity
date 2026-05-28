@@ -27,6 +27,12 @@ bld/
 project.lock.json
 project.fragment.lock.json
 artifacts/
+.build/
+
+# Frontend
+node_modules/
+dist/
+*.tsbuildinfo
 
 # ASP.NET Scaffolding
 ScaffoldingReadMe.txt
