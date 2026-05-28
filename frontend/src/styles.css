@@ -233,17 +233,17 @@ button:disabled {
 }
 
 .auth-page-grid {
-  width: min(1160px, 100%);
+  width: min(1360px, 100%);
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 460px;
-  gap: 22px;
+  grid-template-columns: minmax(0, 1fr) 520px;
+  gap: 28px;
   align-items: stretch;
   margin: 0 auto;
 }
 
 .auth-poster {
-  height: 720px;
-  min-height: 720px;
+  height: 740px;
+  min-height: 740px;
   position: relative;
   overflow: hidden;
   display: flex;
@@ -258,17 +258,17 @@ button:disabled {
 .auth-poster > div {
   position: relative;
   z-index: 1;
-  padding: 48px;
+  padding: 56px;
 }
 
 .auth-surface {
-  height: 720px;
-  min-height: 720px;
+  height: 740px;
+  min-height: 740px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 13px;
-  padding: 26px;
+  gap: 16px;
+  padding: 32px;
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.11);
   background: rgba(14, 17, 24, 0.88);
@@ -278,7 +278,7 @@ button:disabled {
 
 h2 {
   color: #fffaf0;
-  font-size: 28px;
+  font-size: 34px;
   line-height: 1.1;
   letter-spacing: 0;
 }
@@ -286,13 +286,14 @@ h2 {
 .auth-lead {
   margin-top: 10px;
   color: #aeb8c9;
+  font-size: 16px;
   line-height: 1.45;
 }
 
 .auth-mode-copy {
-  margin-top: 8px;
+  margin-top: 10px;
   color: #d7deea;
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1.55;
 }
 
@@ -306,8 +307,9 @@ h2 {
 }
 
 .tabs button {
-  min-height: 44px;
+  min-height: 50px;
   padding: 0 10px;
+  font-size: 16px;
 }
 
 .tabs .active {
@@ -329,7 +331,7 @@ h2 {
 label,
 small {
   color: #aeb8c9;
-  font-size: 13px;
+  font-size: 15px;
 }
 
 label {
@@ -339,13 +341,14 @@ label {
 
 input {
   width: 100%;
-  min-height: 42px;
+  min-height: 52px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
   outline: none;
   color: #f8fafc;
   background: rgba(255, 255, 255, 0.07);
-  padding: 0 14px;
+  padding: 0 16px;
+  font-size: 16px;
 }
 
 input::placeholder {
@@ -365,16 +368,17 @@ input.input-error:focus {
 
 .field-error {
   color: #ff9a9a;
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.35;
 }
 
 .primary-action,
 .google-link {
-  min-height: 44px;
+  min-height: 52px;
   display: grid;
   place-items: center;
   padding: 0 16px;
+  font-size: 16px;
   font-weight: 800;
 }
 
@@ -398,24 +402,26 @@ input.input-error:focus {
 
 .confirm-strip p {
   color: #efe4c4;
-  font-size: 13px;
+  font-size: 15px;
   line-height: 1.35;
 }
 
 .confirm-strip button {
-  min-height: 42px;
+  min-height: 48px;
   padding: 0 12px;
+  font-size: 15px;
   font-weight: 800;
   background: rgba(255, 215, 111, 0.22);
 }
 
 .message {
-  min-height: 44px;
+  min-height: 52px;
   display: block;
   color: #e6edf8;
   border-left: 3px solid #8ee1cf;
   background: rgba(142, 225, 207, 0.1);
   padding: 12px 14px;
+  font-size: 15px;
   line-height: 1.35;
 }
 
