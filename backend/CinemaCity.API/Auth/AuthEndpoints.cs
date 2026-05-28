@@ -1,6 +1,10 @@
 using System.Security.Claims;
 using CinemaCity.Domain.Entities;
+using CinemaCity.Domain.Enums;
 using CinemaCity.Infrastructure.Data;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.Google;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -32,6 +36,12 @@ public static class AuthEndpoints
         group.MapGet("/me", Me)
             .RequireAuthorization()
             .WithName("CurrentUser");
+
+        group.MapGet("/google", GoogleLogin)
+            .WithName("GoogleLogin");
+
+        group.MapGet("/google/callback", GoogleCallbackAsync)
+            .WithName("GoogleCallback");
 
         return group;
     }
@@ -278,8 +288,91 @@ public static class AuthEndpoints
             userId,
             principal.FindFirstValue(ClaimTypes.Name) ?? string.Empty,
             principal.FindFirstValue(ClaimTypes.Email) ?? string.Empty,
-            Enum.Parse<Domain.Enums.UserRole>(principal.FindFirstValue(ClaimTypes.Role) ?? "User"),
+            Enum.Parse<UserRole>(principal.FindFirstValue(ClaimTypes.Role) ?? "User"),
             AvatarUrl: null));
+    }
+
+    private static ChallengeHttpResult GoogleLogin(HttpContext httpContext, string? returnUrl = null)
+    {
+        var redirectUrl = string.IsNullOrWhiteSpace(returnUrl)
+            ? "/api/auth/google/callback"
+            : $"/api/auth/google/callback?returnUrl={Uri.EscapeDataString(returnUrl)}";
+
+        var properties = new AuthenticationProperties
+        {
+            RedirectUri = redirectUrl
+        };
+
+        return TypedResults.Challenge(properties, [GoogleDefaults.AuthenticationScheme]);
+    }
+
+    private static async Task<IResult> GoogleCallbackAsync(
+        HttpContext httpContext,
+        AppDbContext dbContext,
+        TokenService tokenService,
+        IOptions<JwtOptions> jwtOptions,
+        string? returnUrl,
+        CancellationToken cancellationToken)
+    {
+        var externalAuth = await httpContext.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+
+        if (!externalAuth.Succeeded || externalAuth.Principal is null)
+        {
+            return Results.BadRequest(new { Message = "Google authentication failed." });
+        }
+
+        var googleId = externalAuth.Principal.FindFirstValue(ClaimTypes.NameIdentifier);
+        var email = externalAuth.Principal.FindFirstValue(ClaimTypes.Email);
+        var name = externalAuth.Principal.FindFirstValue(ClaimTypes.Name);
+
+        if (string.IsNullOrWhiteSpace(googleId) || string.IsNullOrWhiteSpace(email))
+        {
+            return Results.BadRequest(new { Message = "Google profile does not contain required identity data." });
+        }
+
+        var normalizedEmail = NormalizeEmail(email);
+        var user = await dbContext.Users
+            .FirstOrDefaultAsync(
+                candidate => candidate.GoogleId == googleId || candidate.Email == normalizedEmail,
+                cancellationToken);
+
+        if (user is null)
+        {
+            user = new User
+            {
+                Id = Guid.NewGuid(),
+                Username = await CreateUniqueUsernameAsync(dbContext, name, normalizedEmail, cancellationToken),
+                Email = normalizedEmail,
+                GoogleId = googleId,
+                IsEmailConfirmed = true,
+                CreatedAt = DateTimeOffset.UtcNow
+            };
+
+            dbContext.Users.Add(user);
+        }
+        else
+        {
+            user.GoogleId ??= googleId;
+            user.IsEmailConfirmed = true;
+            user.UpdatedAt = DateTimeOffset.UtcNow;
+        }
+
+        var authResponse = CreateAuthSession(
+            user,
+            httpContext,
+            dbContext,
+            tokenService,
+            jwtOptions.Value);
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+        await httpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+
+        if (!string.IsNullOrWhiteSpace(returnUrl))
+        {
+            return Results.Redirect(returnUrl);
+        }
+
+        return Results.Ok(authResponse);
     }
 
     private static AuthResponse CreateAuthSession(
@@ -335,6 +428,50 @@ public static class AuthEndpoints
             user.Email,
             user.Role,
             user.AvatarUrl);
+    }
+
+    private static async Task<string> CreateUniqueUsernameAsync(
+        AppDbContext dbContext,
+        string? name,
+        string email,
+        CancellationToken cancellationToken)
+    {
+        var baseUsername = SlugifyUsername(name)
+            ?? SlugifyUsername(email.Split('@')[0])
+            ?? $"user{Random.Shared.Next(1000, 9999)}";
+
+        var username = baseUsername;
+        var suffix = 1;
+
+        while (await dbContext.Users.AnyAsync(user => user.Username == username, cancellationToken))
+        {
+            username = $"{baseUsername}{suffix}";
+            suffix += 1;
+        }
+
+        return username;
+    }
+
+    private static string? SlugifyUsername(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var characters = value
+            .Trim()
+            .ToLowerInvariant()
+            .Where(character => char.IsLetterOrDigit(character) || character == '_')
+            .Take(30)
+            .ToArray();
+
+        if (characters.Length < 3)
+        {
+            return null;
+        }
+
+        return new string(characters);
     }
 
     private static string NormalizeEmail(string email)
