@@ -233,9 +233,9 @@ button:disabled {
 }
 
 .auth-page-grid {
-  width: min(1060px, 100%);
+  width: min(1160px, 100%);
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 420px;
+  grid-template-columns: minmax(0, 1fr) 460px;
   gap: 22px;
   align-items: stretch;
   margin: 0 auto;
@@ -258,7 +258,7 @@ button:disabled {
 .auth-poster > div {
   position: relative;
   z-index: 1;
-  padding: 44px;
+  padding: 48px;
 }
 
 .auth-surface {
@@ -268,7 +268,7 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 13px;
-  padding: 22px;
+  padding: 26px;
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.11);
   background: rgba(14, 17, 24, 0.88);
@@ -293,7 +293,7 @@ h2 {
   margin-top: 8px;
   color: #d7deea;
   font-size: 14px;
-  line-height: 1.45;
+  line-height: 1.55;
 }
 
 .tabs {

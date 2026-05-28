@@ -72,7 +72,7 @@ function App() {
   const [confirmationToken, setConfirmationToken] = useState('');
   const [accessToken, setAccessToken] = useState('');
   const [user, setUser] = useState<AuthUser | null>(null);
-  const [message, setMessage] = useState('Раді бачити вас у CinemaCity.');
+  const [message, setMessage] = useState('');
   const [isBusy, setIsBusy] = useState(false);
 
   const googleLoginUrl = useMemo(() => {
@@ -499,9 +499,11 @@ function AuthPage({
             Увійти через Google
           </a>
 
-          <output className="message" aria-live="polite">
-            {message}
-          </output>
+          {message ? (
+            <output className="message" aria-live="polite">
+              {message}
+            </output>
+          ) : null}
 
           {user ? (
             <div className="profile-strip">
