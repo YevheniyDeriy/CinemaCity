@@ -1,4 +1,4 @@
-import React, { FormEvent, useEffect, useMemo, useState } from 'react';
+import React, { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Link, Navigate, Route, Routes } from 'react-router-dom';
 import './styles.css';
@@ -73,6 +73,7 @@ function App() {
   const [accessToken, setAccessToken] = useState('');
   const [user, setUser] = useState<AuthUser | null>(null);
   const [message, setMessage] = useState('');
+  const [passwordError, setPasswordError] = useState('');
   const [isBusy, setIsBusy] = useState(false);
 
   const googleLoginUrl = useMemo(() => {
@@ -155,6 +156,7 @@ function App() {
   async function handleRegister(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setIsBusy(true);
+    setPasswordError('');
 
     try {
       const result = await request<RegisterResponse>('/api/auth/register', {
@@ -163,9 +165,17 @@ function App() {
       });
 
       setConfirmationToken(result.emailConfirmationToken);
-      setMessage('Акаунт створено. Підтвердьте пошту кнопкою нижче, а потім увійдіть.');
+      setMessage('');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Не вдалося створити акаунт.');
+      const errorMessage = error instanceof Error ? error.message : 'Не вдалося створити акаунт.';
+
+      if (errorMessage === 'Пароль має містити щонайменше 8 символів.') {
+        setPasswordError(errorMessage);
+        setMessage('');
+        return;
+      }
+
+      setMessage(errorMessage);
     } finally {
       setIsBusy(false);
     }
@@ -254,10 +264,12 @@ function App() {
               message={message}
               mode={mode}
               password={password}
+              passwordError={passwordError}
               setConfirmPassword={setConfirmPassword}
               setEmail={setEmail}
               setMode={setMode}
               setPassword={setPassword}
+              setPasswordError={setPasswordError}
               setUsername={setUsername}
               status={status}
               user={user}
@@ -341,10 +353,12 @@ type AuthPageProps = {
   message: string;
   mode: 'register' | 'login';
   password: string;
+  passwordError: string;
   setConfirmPassword: (value: string) => void;
   setEmail: (value: string) => void;
   setMode: (value: 'register' | 'login') => void;
   setPassword: (value: string) => void;
+  setPasswordError: (value: string) => void;
   setUsername: (value: string) => void;
   status: string;
   user: AuthUser | null;
@@ -364,15 +378,38 @@ function AuthPage({
   message,
   mode,
   password,
+  passwordError,
   setConfirmPassword,
   setEmail,
   setMode,
   setPassword,
+  setPasswordError,
   setUsername,
   status,
   user,
   username
 }: AuthPageProps) {
+  const registerPasswordRef = useRef<HTMLInputElement>(null);
+
+  function handleRegisterSubmit(event: FormEvent<HTMLFormElement>) {
+    if (password.length < 8) {
+      event.preventDefault();
+      setPasswordError('Пароль має містити щонайменше 8 символів.');
+      registerPasswordRef.current?.focus();
+      return;
+    }
+
+    handleRegister(event);
+  }
+
+  function handlePasswordChange(value: string) {
+    setPassword(value);
+
+    if (passwordError && value.length >= 8) {
+      setPasswordError('');
+    }
+  }
+
   return (
     <main className="page-shell auth-page-shell">
       <SiteHeader />
@@ -402,21 +439,27 @@ function AuthPage({
             <button
               className={mode === 'login' ? 'active' : ''}
               type="button"
-              onClick={() => setMode('login')}
+              onClick={() => {
+                setMode('login');
+                setPasswordError('');
+              }}
             >
               Вхід
             </button>
             <button
               className={mode === 'register' ? 'active' : ''}
               type="button"
-              onClick={() => setMode('register')}
+              onClick={() => {
+                setMode('register');
+                setPasswordError('');
+              }}
             >
               Реєстрація
             </button>
           </div>
 
           {mode === 'register' ? (
-            <form className="auth-form auth-form--register" onSubmit={handleRegister}>
+            <form className="auth-form auth-form--register" onSubmit={handleRegisterSubmit}>
               <label>
                 Ім’я в CinemaCity
                 <input
@@ -437,11 +480,20 @@ function AuthPage({
               <label>
                 Пароль
                 <input
+                  aria-describedby={passwordError ? 'password-error' : undefined}
+                  aria-invalid={passwordError ? 'true' : 'false'}
+                  className={passwordError ? 'input-error' : ''}
+                  ref={registerPasswordRef}
                   value={password}
-                  onChange={(event) => setPassword(event.target.value)}
+                  onChange={(event) => handlePasswordChange(event.target.value)}
                   placeholder="Ваш пароль"
                   type="password"
                 />
+                {passwordError ? (
+                  <span className="field-error" id="password-error">
+                    {passwordError}
+                  </span>
+                ) : null}
               </label>
               <label>
                 Повторіть пароль
@@ -452,10 +504,6 @@ function AuthPage({
                   type="password"
                 />
               </label>
-              <div className="register-hint">
-                <span>Після створення акаунта потрібно підтвердити пошту.</span>
-                <span>Пароль має містити щонайменше 8 символів.</span>
-              </div>
               <button className="primary-action" disabled={isBusy} type="submit">
                 Створити акаунт
               </button>

@@ -357,6 +357,18 @@ input:focus {
   box-shadow: 0 0 0 3px rgba(142, 225, 207, 0.18);
 }
 
+input.input-error,
+input.input-error:focus {
+  border-color: #f05252;
+  box-shadow: 0 0 0 3px rgba(240, 82, 82, 0.2);
+}
+
+.field-error {
+  color: #ff9a9a;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .primary-action,
 .google-link {
   min-height: 44px;
@@ -373,22 +385,6 @@ input:focus {
 .google-link {
   background: #fffaf0;
   color: #121826;
-}
-
-.register-hint {
-  display: grid;
-  gap: 6px;
-  padding: 12px;
-  border-radius: 8px;
-  color: #efe4c4;
-  font-size: 13px;
-  line-height: 1.35;
-  background: rgba(255, 215, 111, 0.09);
-  border: 1px solid rgba(255, 215, 111, 0.18);
-}
-
-.register-hint span {
-  display: block;
 }
 
 .confirm-strip {
