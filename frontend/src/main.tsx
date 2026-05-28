@@ -377,7 +377,7 @@ function AuthPage({
     <main className="page-shell auth-page-shell">
       <SiteHeader />
 
-      <section className={`auth-page-grid auth-page-grid--${mode}`} aria-label="Сторінка автентифікації CinemaCity">
+      <section className="auth-page-grid" aria-label="Сторінка автентифікації CinemaCity">
         <div className="auth-poster" aria-hidden="true">
           <div>
             <p className="kicker">Особистий зал</p>
@@ -386,7 +386,7 @@ function AuthPage({
           </div>
         </div>
 
-        <section className={`auth-surface auth-surface--${mode}`} aria-label="Вхід в CinemaCity">
+        <section className="auth-surface" aria-label="Вхід в CinemaCity">
           <div>
             <p className="eyebrow">Ваш профіль</p>
             <h2>{mode === 'register' ? 'Створіть акаунт' : 'Увійдіть в акаунт'}</h2>

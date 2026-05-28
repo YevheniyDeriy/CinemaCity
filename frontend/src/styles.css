@@ -233,25 +233,17 @@ button:disabled {
 }
 
 .auth-page-grid {
-  width: min(1120px, 100%);
+  width: min(1060px, 100%);
   display: grid;
+  grid-template-columns: minmax(0, 1fr) 420px;
   gap: 22px;
-  align-items: center;
+  align-items: stretch;
   margin: 0 auto;
 }
 
-.auth-page-grid--login {
-  width: min(980px, 100%);
-  grid-template-columns: minmax(0, 1fr) 340px;
-}
-
-.auth-page-grid--register {
-  width: min(1180px, 100%);
-  grid-template-columns: minmax(0, 0.86fr) minmax(520px, 560px);
-}
-
 .auth-poster {
-  min-height: 620px;
+  height: 720px;
+  min-height: 720px;
   position: relative;
   overflow: hidden;
   display: flex;
@@ -270,32 +262,18 @@ button:disabled {
 }
 
 .auth-surface {
-  min-height: auto;
+  height: 720px;
+  min-height: 720px;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 20px;
+  gap: 13px;
+  padding: 22px;
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.11);
   background: rgba(14, 17, 24, 0.88);
   box-shadow: 0 28px 80px rgba(0, 0, 0, 0.28);
   backdrop-filter: blur(18px);
-}
-
-.auth-surface--login {
-  align-self: center;
-  border-color: rgba(142, 225, 207, 0.2);
-  padding: 18px;
-  gap: 12px;
-}
-
-.auth-surface--register {
-  padding: 24px;
-  gap: 16px;
-  border-color: rgba(255, 215, 111, 0.2);
-  background:
-    linear-gradient(135deg, rgba(255, 215, 111, 0.08), transparent 42%),
-    rgba(14, 17, 24, 0.9);
 }
 
 h2 {
@@ -342,18 +320,10 @@ h2 {
   gap: 12px;
 }
 
-.auth-form--login {
-  padding-top: 4px;
-}
-
+.auth-form--login,
 .auth-form--register {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   padding-top: 2px;
-}
-
-.auth-form--register .register-hint,
-.auth-form--register .primary-action {
-  grid-column: 1 / -1;
 }
 
 label,
@@ -398,10 +368,6 @@ input:focus {
 
 .primary-action {
   background: linear-gradient(135deg, #d92d47, #16806f);
-}
-
-.auth-surface--register .primary-action {
-  background: linear-gradient(135deg, #d92d47, #d8a928);
 }
 
 .google-link {
@@ -503,7 +469,8 @@ input:focus {
 
   .auth-poster,
   .auth-surface {
-    min-height: auto;
+    height: 620px;
+    min-height: 620px;
   }
 
   .auth-poster {
@@ -564,7 +531,4 @@ input:focus {
     padding: 20px;
   }
 
-  .auth-form--register {
-    grid-template-columns: 1fr;
-  }
 }
