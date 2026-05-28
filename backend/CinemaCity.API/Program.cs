@@ -1,3 +1,4 @@
+using CinemaCity.API.Auth;
 using CinemaCity.Application;
 using CinemaCity.Infrastructure;
 using CinemaCity.Infrastructure.Data;
@@ -7,6 +8,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddCinemaCityAuth(builder.Configuration);
 builder.Services.AddOpenApi();
 
 var app = builder.Build();
@@ -17,6 +19,8 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapGet("/", () => Results.Ok(new
 {
