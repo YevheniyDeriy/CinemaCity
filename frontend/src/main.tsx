@@ -188,6 +188,10 @@ type MovieUserState = {
     id: string;
     score: number;
   } | null;
+  lists?: Array<{
+    id: string;
+    name: string;
+  }>;
 };
 
 type ProfileStats = {
@@ -207,6 +211,29 @@ type WatchlistItem = MovieCard & {
   status: WatchlistStatus;
   addedAt: string;
   updatedAt?: string | null;
+};
+
+type HomeRailResponse = {
+  source: string;
+  items: MovieCard[];
+};
+
+type MovieListSummary = {
+  id: string;
+  name: string;
+  description?: string | null;
+  itemsCount: number;
+  createdAt: string;
+  updatedAt?: string | null;
+};
+
+type MovieListItem = MovieCard & {
+  movieId: string;
+  addedAt: string;
+};
+
+type MovieListDetails = MovieListSummary & {
+  items: MovieListItem[];
 };
 
 type PagedResult<T> = {
@@ -474,7 +501,7 @@ function App() {
       <HeaderAuthContext.Provider value={{ user, isBusy, handleLogout }}>
         <BrowserRouter>
           <Routes>
-            <Route path="/" element={<HomePage />} />
+            <Route path="/" element={<HomePage accessToken={accessToken} user={user} />} />
             <Route path="/catalog" element={<CatalogPage />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/profile" element={user && accessToken ? <ProfilePage accessToken={accessToken} user={user} /> : <Navigate to="/auth" replace />} />
@@ -519,8 +546,10 @@ function App() {
   );
 }
 
-function HomePage() {
+function HomePage({ accessToken, user }: { accessToken: string; user: AuthUser | null }) {
   const [activeSlide, setActiveSlide] = useState(0);
+  const [recommendations, setRecommendations] = useState<MovieCard[]>([]);
+  const [popularNow, setPopularNow] = useState<MovieCard[]>([]);
   const currentSlide = spotlightSlides[activeSlide];
 
   useEffect(() => {
@@ -530,6 +559,35 @@ function HomePage() {
 
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const authHeaders: HeadersInit = accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
+
+    Promise.all([
+      fetch(`${apiUrl}/api/home/recommendations?limit=10`, {
+        signal: controller.signal,
+        headers: authHeaders
+      }).then(async (response) => (response.ok ? ((await response.json()) as HomeRailResponse).items : [])),
+      fetch(`${apiUrl}/api/home/popular-now?days=7&limit=10`, { signal: controller.signal }).then(async (response) =>
+        response.ok ? ((await response.json()) as HomeRailResponse).items : []
+      )
+    ])
+      .then(([recommendationItems, popularItems]) => {
+        setRecommendations(recommendationItems);
+        setPopularNow(popularItems);
+      })
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          return;
+        }
+
+        setRecommendations([]);
+        setPopularNow([]);
+      });
+
+    return () => controller.abort();
+  }, [accessToken]);
 
   function goToSlide(slide: number) {
     setActiveSlide((slide + spotlightSlides.length) % spotlightSlides.length);
@@ -591,8 +649,58 @@ function HomePage() {
         </Link>
       </section>
 
+      <section className="home-insight-band" aria-label="Підбірки CinemaCity">
+        <div>
+          <p className="kicker">Підбір без хаосу</p>
+          <h2>{user ? `Сьогодні для ${user.username}` : 'Сьогодні в CinemaCity'}</h2>
+          <p>
+            Рекомендації збираються з жанрів, які ви нещодавно дивилися або оцінювали. Акторські збіги враховуються обережно, щоб не забивати жанровий смак.
+          </p>
+        </div>
+        <Link className="button subtle" to={user ? '/profile?tab=lists' : '/auth'}>
+          {user ? 'Мої списки' : 'Увійти для персоналізації'}
+        </Link>
+      </section>
+
+      <HomeMovieRail
+        title={user ? 'Рекомендації для вас' : 'Рекомендації'}
+        description="Фільми та серіали на основі жанрових збігів і невеликого акторського сигналу."
+        items={recommendations}
+      />
+
+      <HomeMovieRail
+        title="Популярно зараз"
+        description="Назви, які отримали найбільше оцінок за останні 7 днів."
+        items={popularNow}
+      />
+
       <SiteFooter />
     </main>
+  );
+}
+
+function HomeMovieRail({ title, description, items }: { title: string; description: string; items: MovieCard[] }) {
+  if (!items.length) {
+    return null;
+  }
+
+  return (
+    <section className="home-rail" aria-label={title}>
+      <div className="home-rail-head">
+        <div>
+          <h2>{title}</h2>
+          <p>{description}</p>
+        </div>
+        <Link className="button subtle" to="/catalog">
+          Каталог
+        </Link>
+      </div>
+      <div className="home-rail-scroll">
+        {items.map((movie) => (
+          <MovieCardLink key={movie.id} movie={movie} />
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -1566,6 +1674,7 @@ function ProfilePage({ accessToken, user }: { accessToken: string; user: AuthUse
   const [stats, setStats] = useState<ProfileStats | null>(null);
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
   const [watched, setWatched] = useState<WatchlistItem[]>([]);
+  const [movieLists, setMovieLists] = useState<MovieListSummary[]>([]);
   const [message, setMessage] = useState('');
   const activeTab = new URLSearchParams(location.search).get('tab') ?? 'profile';
 
@@ -1576,12 +1685,14 @@ function ProfilePage({ accessToken, user }: { accessToken: string; user: AuthUse
     Promise.all([
       authedRequest<ProfileStats>('/api/profile/stats', accessToken, { signal: controller.signal }),
       authedRequest<WatchlistItem[]>('/api/profile/watchlist?status=Watchlist', accessToken, { signal: controller.signal }),
-      authedRequest<WatchlistItem[]>('/api/profile/watchlist?status=Watched', accessToken, { signal: controller.signal })
+      authedRequest<WatchlistItem[]>('/api/profile/watchlist?status=Watched', accessToken, { signal: controller.signal }),
+      authedRequest<MovieListSummary[]>('/api/profile/lists', accessToken, { signal: controller.signal })
     ])
-      .then(([statsResult, watchlistResult, watchedResult]) => {
+      .then(([statsResult, watchlistResult, watchedResult, listsResult]) => {
         setStats(statsResult);
         setWatchlist(watchlistResult);
         setWatched(watchedResult);
+        setMovieLists(listsResult);
       })
       .catch((error) => {
         if (error instanceof DOMException && error.name === 'AbortError') {
@@ -1644,6 +1755,9 @@ function ProfilePage({ accessToken, user }: { accessToken: string; user: AuthUse
           <Link className={activeTab === 'reviews' ? 'active' : ''} to="/profile?tab=reviews">
             Рецензії
           </Link>
+          <Link className={activeTab === 'lists' ? 'active' : ''} to="/profile?tab=lists">
+            Списки
+          </Link>
         </nav>
 
         {message ? <StatusMessage tone="danger">{message}</StatusMessage> : null}
@@ -1674,6 +1788,10 @@ function ProfilePage({ accessToken, user }: { accessToken: string; user: AuthUse
               </article>
             </div>
           </section>
+        ) : null}
+
+        {activeTab === 'lists' ? (
+          <ProfileListsPanel accessToken={accessToken} lists={movieLists} onListsChanged={setMovieLists} />
         ) : null}
 
         {activeTab === 'profile' ? (
@@ -1732,6 +1850,195 @@ function ProfileMovieSection({ title, items, emptyText }: { title: string; items
       ) : (
         <p className="muted-text">{emptyText}</p>
       )}
+    </section>
+  );
+}
+
+function ProfileListsPanel({
+  accessToken,
+  lists,
+  onListsChanged
+}: {
+  accessToken: string;
+  lists: MovieListSummary[];
+  onListsChanged: (lists: MovieListSummary[]) => void;
+}) {
+  const { notify } = useToast();
+  const [selectedListId, setSelectedListId] = useState(lists[0]?.id ?? '');
+  const [selectedList, setSelectedList] = useState<MovieListDetails | null>(null);
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [editingId, setEditingId] = useState('');
+
+  useEffect(() => {
+    if (!selectedListId && lists.length) {
+      setSelectedListId(lists[0].id);
+    }
+  }, [lists, selectedListId]);
+
+  useEffect(() => {
+    if (!selectedListId) {
+      setSelectedList(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    authedRequest<MovieListDetails>(`/api/profile/lists/${selectedListId}`, accessToken, { signal: controller.signal })
+      .then(setSelectedList)
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          return;
+        }
+
+        notify(error instanceof Error ? error.message : 'Не вдалося завантажити список.', 'error');
+      });
+
+    return () => controller.abort();
+  }, [accessToken, selectedListId]);
+
+  async function reloadLists(nextSelectedId?: string) {
+    const result = await authedRequest<MovieListSummary[]>('/api/profile/lists', accessToken);
+    onListsChanged(result);
+    setSelectedListId(nextSelectedId ?? result[0]?.id ?? '');
+  }
+
+  function startEditList(list: MovieListSummary) {
+    setEditingId(list.id);
+    setName(list.name);
+    setDescription(list.description ?? '');
+  }
+
+  function resetForm() {
+    setEditingId('');
+    setName('');
+    setDescription('');
+  }
+
+  async function submitList(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    try {
+      const payload = { name, description: description || null };
+
+      if (editingId) {
+        await authedRequest(`/api/profile/lists/${editingId}`, accessToken, {
+          method: 'PUT',
+          body: JSON.stringify(payload)
+        });
+        notify('Список оновлено.', 'success');
+        await reloadLists(editingId);
+      } else {
+        const created = await authedRequest<MovieListSummary>('/api/profile/lists', accessToken, {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
+        notify('Список створено.', 'success');
+        await reloadLists(created.id);
+      }
+
+      resetForm();
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Не вдалося зберегти список.', 'error');
+    }
+  }
+
+  async function deleteList(listId: string) {
+    try {
+      await authedRequest(`/api/profile/lists/${listId}`, accessToken, { method: 'DELETE' });
+      notify('Список видалено.', 'success');
+      await reloadLists();
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Не вдалося видалити список.', 'error');
+    }
+  }
+
+  async function removeMovieFromList(movieId: string) {
+    if (!selectedListId) return;
+
+    try {
+      await authedRequest(`/api/profile/lists/${selectedListId}/items/${movieId}`, accessToken, { method: 'DELETE' });
+      setSelectedList((current) => (current ? { ...current, items: current.items.filter((item) => item.movieId !== movieId) } : current));
+      await reloadLists(selectedListId);
+      notify('Фільм прибрано зі списку.', 'success');
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Не вдалося прибрати фільм.', 'error');
+    }
+  }
+
+  return (
+    <section className="profile-panel list-manager">
+      <form className="list-form" onSubmit={submitList}>
+        <div className="admin-form-head">
+          <div>
+            <p className="eyebrow">{editingId ? 'Редагування' : 'Новий список'}</p>
+            <h2>{editingId ? 'Оновити список' : 'Створити список'}</h2>
+          </div>
+          {editingId ? <button type="button" onClick={resetForm}>Скасувати</button> : null}
+        </div>
+        <label>
+          Назва списку
+          <input value={name} onChange={(event) => setName(event.target.value)} maxLength={80} required />
+        </label>
+        <label>
+          Опис
+          <textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={500} />
+        </label>
+        <button className="primary-action" type="submit">
+          {editingId ? 'Зберегти' : 'Створити'}
+        </button>
+      </form>
+
+      <div className="list-layout">
+        <aside className="list-sidebar" aria-label="Ваші списки">
+          {lists.length ? (
+            lists.map((list) => (
+              <button className={selectedListId === list.id ? 'active' : ''} key={list.id} type="button" onClick={() => setSelectedListId(list.id)}>
+                <strong>{list.name}</strong>
+                <span>{list.itemsCount} назв</span>
+              </button>
+            ))
+          ) : (
+            <p className="muted-text">Створіть перший список і додавайте в нього фільми або серіали зі сторінки назви.</p>
+          )}
+        </aside>
+
+        <section className="list-details">
+          {selectedList ? (
+            <>
+              <div className="admin-form-head">
+                <div>
+                  <h2>{selectedList.name}</h2>
+                  {selectedList.description ? <p>{selectedList.description}</p> : null}
+                </div>
+                <div className="list-actions">
+                  <button type="button" onClick={() => startEditList(selectedList)}>
+                    Редагувати
+                  </button>
+                  <button type="button" onClick={() => deleteList(selectedList.id)}>
+                    Видалити
+                  </button>
+                </div>
+              </div>
+              {selectedList.items.length ? (
+                <div className="profile-poster-grid">
+                  {selectedList.items.map((item) => (
+                    <article className="list-movie-card" key={item.id}>
+                      <MovieCardLink movie={{ ...item, id: item.movieId }} />
+                      <button type="button" onClick={() => removeMovieFromList(item.movieId)}>
+                        Прибрати
+                      </button>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p className="muted-text">У цьому списку поки немає назв.</p>
+              )}
+            </>
+          ) : (
+            <p className="muted-text">Оберіть список або створіть новий.</p>
+          )}
+        </section>
+      </div>
     </section>
   );
 }
@@ -2284,6 +2591,9 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
   const [commentsByReview, setCommentsByReview] = useState<Record<string, CommentResponse[]>>({});
   const [commentInputs, setCommentInputs] = useState<Record<string, string>>({});
   const [userState, setUserState] = useState<MovieUserState | null>(null);
+  const [customLists, setCustomLists] = useState<MovieListSummary[]>([]);
+  const [selectedCustomListId, setSelectedCustomListId] = useState('');
+  const [newCustomListName, setNewCustomListName] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
@@ -2369,6 +2679,24 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
     return () => controller.abort();
   }, [accessToken, id, refreshTick]);
 
+  useEffect(() => {
+    if (!accessToken || !user) {
+      setCustomLists([]);
+      setSelectedCustomListId('');
+      return;
+    }
+
+    const controller = new AbortController();
+    authedRequest<MovieListSummary[]>('/api/profile/lists', accessToken, { signal: controller.signal })
+      .then((lists) => {
+        setCustomLists(lists);
+        setSelectedCustomListId((current) => current || lists[0]?.id || '');
+      })
+      .catch(() => setCustomLists([]));
+
+    return () => controller.abort();
+  }, [accessToken, user]);
+
   async function submitRating(target: { movieId?: string; episodeId?: string }, scoreValue: string) {
     if (!accessToken) {
       setActionMessage('Щоб поставити оцінку, увійдіть в акаунт.');
@@ -2440,6 +2768,78 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
       setActionMessage(requestError instanceof Error ? requestError.message : 'Не вдалося оновити список.');
     } finally {
       setIsSubmitting(false);
+    }
+  }
+
+  async function createCustomList() {
+    if (!accessToken) {
+      setActionMessage('Щоб створити список, увійдіть в акаунт.');
+      return;
+    }
+
+    const trimmedName = newCustomListName.trim();
+    if (!trimmedName) {
+      setActionMessage('Вкажіть назву списку.');
+      return;
+    }
+
+    try {
+      const created = await authedRequest<MovieListSummary>('/api/profile/lists', accessToken, {
+        method: 'POST',
+        body: JSON.stringify({ name: trimmedName, description: null })
+      });
+
+      setCustomLists((current) => [created, ...current]);
+      setSelectedCustomListId(created.id);
+      setNewCustomListName('');
+      setActionMessage('Список створено.');
+    } catch (requestError) {
+      setActionMessage(requestError instanceof Error ? requestError.message : 'Не вдалося створити список.');
+    }
+  }
+
+  async function addToCustomList() {
+    if (!accessToken || !movie || !selectedCustomListId) {
+      setActionMessage('Оберіть список або створіть новий.');
+      return;
+    }
+
+    try {
+      await authedRequest(`/api/profile/lists/${selectedCustomListId}/items`, accessToken, {
+        method: 'POST',
+        body: JSON.stringify({ movieId: movie.id })
+      });
+
+      const listName = customLists.find((list) => list.id === selectedCustomListId)?.name ?? 'список';
+      setUserState((current) => ({
+        ...(current ?? {}),
+        lists: [
+          ...(current?.lists?.filter((list) => list.id !== selectedCustomListId) ?? []),
+          { id: selectedCustomListId, name: listName }
+        ]
+      }));
+      setCustomLists((current) => current.map((list) => (list.id === selectedCustomListId ? { ...list, itemsCount: list.itemsCount + 1 } : list)));
+      setActionMessage(`Додано у список “${listName}”.`);
+    } catch (requestError) {
+      setActionMessage(requestError instanceof Error ? requestError.message : 'Не вдалося додати у список.');
+    }
+  }
+
+  async function removeFromCustomList(listId: string) {
+    if (!accessToken || !movie) {
+      return;
+    }
+
+    try {
+      await authedRequest(`/api/profile/lists/${listId}/items/${movie.id}`, accessToken, { method: 'DELETE' });
+      setUserState((current) => ({
+        ...(current ?? {}),
+        lists: current?.lists?.filter((list) => list.id !== listId) ?? []
+      }));
+      setCustomLists((current) => current.map((list) => (list.id === listId ? { ...list, itemsCount: Math.max(list.itemsCount - 1, 0) } : list)));
+      setActionMessage('Прибрано з користувацького списку.');
+    } catch (requestError) {
+      setActionMessage(requestError instanceof Error ? requestError.message : 'Не вдалося прибрати зі списку.');
     }
   }
 
@@ -2653,6 +3053,40 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
                 <button disabled={isSubmitting} type="button" onClick={removeFromWatchlist}>
                   Прибрати
                 </button>
+              ) : null}
+              {user ? (
+                <div className="custom-list-box">
+                  <strong>Мої списки</strong>
+                  {customLists.length ? (
+                    <>
+                      <select value={selectedCustomListId} onChange={(event) => setSelectedCustomListId(event.target.value)} aria-label="Обрати список">
+                        {customLists.map((list) => (
+                          <option key={list.id} value={list.id}>
+                            {list.name}
+                          </option>
+                        ))}
+                      </select>
+                      <button type="button" onClick={addToCustomList}>
+                        Додати у список
+                      </button>
+                    </>
+                  ) : null}
+                  <div className="custom-list-create">
+                    <input value={newCustomListName} onChange={(event) => setNewCustomListName(event.target.value)} placeholder="Новий список" maxLength={80} />
+                    <button type="button" onClick={createCustomList}>
+                      +
+                    </button>
+                  </div>
+                  {userState?.lists?.length ? (
+                    <div className="custom-list-memberships">
+                      {userState.lists.map((list) => (
+                        <button key={list.id} type="button" onClick={() => removeFromCustomList(list.id)}>
+                          {list.name} ×
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
               ) : null}
             </aside>
           </div>
@@ -3148,6 +3582,14 @@ function toFriendlyMessage(message?: string) {
       return 'Акаунт тимчасово заблоковано після кількох спроб входу.';
     case 'Email must be confirmed before login.':
       return 'Спочатку підтвердьте пошту.';
+    case 'List name already exists.':
+      return 'Список із такою назвою вже існує.';
+    case 'List was not found.':
+      return 'Список не знайдено.';
+    case 'List name is required and must be at most 80 characters.':
+      return 'Назва списку обов’язкова і має бути до 80 символів.';
+    case 'List description must be at most 500 characters.':
+      return 'Опис списку має бути до 500 символів.';
     default:
       return message || 'Щось пішло не так. Спробуйте ще раз.';
   }

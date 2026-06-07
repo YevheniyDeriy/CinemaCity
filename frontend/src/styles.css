@@ -527,6 +527,74 @@ h1 {
   line-height: 1.5;
 }
 
+.home-insight-band,
+.home-rail {
+  width: min(1360px, 100%);
+  margin: 22px auto 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.12);
+}
+
+.home-insight-band {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 22px;
+}
+
+.home-insight-band > div {
+  display: grid;
+  gap: 10px;
+}
+
+.home-insight-band h2,
+.home-rail h2 {
+  font-size: 28px;
+  line-height: 1.15;
+}
+
+.home-insight-band p,
+.home-rail p {
+  max-width: 760px;
+  color: var(--text-soft);
+  line-height: 1.55;
+}
+
+.home-rail {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.home-rail-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.home-rail-head > div {
+  display: grid;
+  gap: 8px;
+}
+
+.home-rail-scroll {
+  display: grid;
+  grid-auto-columns: minmax(172px, 220px);
+  grid-auto-flow: column;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scroll-snap-type: x proximity;
+}
+
+.home-rail-scroll .movie-card {
+  scroll-snap-align: start;
+}
+
 .page-heading {
   display: flex;
   justify-content: space-between;
@@ -1180,6 +1248,45 @@ label {
   background: var(--surface);
 }
 
+.custom-list-box {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.custom-list-box strong {
+  font-size: 15px;
+}
+
+.custom-list-box select,
+.custom-list-box input,
+.custom-list-box button {
+  min-height: 40px;
+  font-size: 14px;
+}
+
+.custom-list-create {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px;
+  gap: 8px;
+}
+
+.custom-list-memberships {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.custom-list-memberships button {
+  min-height: 32px;
+  padding: 0 9px;
+  color: var(--text-soft);
+  font-size: 13px;
+}
+
 .movie-genre-strip,
 .profile-genres {
   display: flex;
@@ -1608,6 +1715,21 @@ label {
     var(--bg);
 }
 
+:root[data-theme="light"] .profile-page-shell {
+  background:
+    radial-gradient(circle at 12% 0%, color-mix(in srgb, var(--brand-2) 12%, transparent), transparent 30%),
+    linear-gradient(180deg, #f8fafc, var(--bg-soft));
+}
+
+:root[data-theme="light"] .home-insight-band,
+:root[data-theme="light"] .home-rail,
+:root[data-theme="light"] .list-form,
+:root[data-theme="light"] .list-details,
+:root[data-theme="light"] .list-sidebar,
+:root[data-theme="light"] .custom-list-box {
+  box-shadow: 0 16px 44px rgba(30, 41, 59, 0.08);
+}
+
 .profile-page {
   width: min(1360px, 100%);
   display: grid;
@@ -1720,6 +1842,73 @@ label {
   gap: 16px;
   padding: 22px 0;
   border-top: 1px solid var(--border);
+}
+
+.list-manager {
+  gap: 18px;
+}
+
+.list-form,
+.list-details,
+.list-sidebar {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.list-layout {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.list-sidebar {
+  position: sticky;
+  top: 16px;
+}
+
+.list-sidebar button {
+  min-height: 64px;
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+  text-align: left;
+}
+
+.list-sidebar button.active {
+  border-color: var(--accent-2);
+  background: color-mix(in srgb, var(--accent-2) 12%, var(--surface-muted));
+}
+
+.list-sidebar span,
+.list-details p {
+  color: var(--muted);
+}
+
+.list-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.list-actions button,
+.list-movie-card > button {
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  font-weight: 800;
+}
+
+.list-movie-card {
+  display: grid;
+  gap: 8px;
 }
 
 .profile-poster-grid {
@@ -1921,6 +2110,7 @@ input.input-error:focus {
   .hero-media,
   .catalog-layout,
   .admin-workspace,
+  .list-layout,
   .auth-page-grid,
   .profile-hero-card,
   .movie-page-head,
@@ -1967,6 +2157,10 @@ input.input-error:focus {
   }
 
   .admin-form {
+    position: static;
+  }
+
+  .list-sidebar {
     position: static;
   }
 }
@@ -2069,6 +2263,12 @@ input.input-error:focus {
 
   .profile-hero-card {
     justify-items: start;
+  }
+
+  .home-insight-band,
+  .home-rail-head {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .profile-tabs {
