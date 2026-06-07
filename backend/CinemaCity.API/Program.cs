@@ -1,6 +1,11 @@
+using CinemaCity.API.Admin;
 using CinemaCity.API.Auth;
 using CinemaCity.API.Movies;
+using CinemaCity.API.Profile;
+using CinemaCity.API.Ratings;
+using CinemaCity.API.Reviews;
 using CinemaCity.API.Search;
+using CinemaCity.API.Series;
 using CinemaCity.Application;
 using CinemaCity.Infrastructure;
 using CinemaCity.Infrastructure.Data;
@@ -65,6 +70,7 @@ if (!app.Environment.IsDevelopment())
 }
 
 app.UseCors("Frontend");
+app.UseStaticFiles();
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -85,7 +91,12 @@ app.MapGet("/health/database", async (AppDbContext dbContext, CancellationToken 
 .WithName("DatabaseHealth");
 
 app.MapAuthEndpoints();
+app.MapAdminEndpoints();
 app.MapMovieEndpoints();
+app.MapSeriesEndpoints();
+app.MapRatingEndpoints();
+app.MapReviewEndpoints();
+app.MapProfileEndpoints();
 app.MapSearchEndpoints();
 
 app.Run();

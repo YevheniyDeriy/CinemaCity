@@ -118,8 +118,10 @@ public static class AuthEndpoints
 
     private static async Task<IResult> ConfirmEmailAsync(
         ConfirmEmailRequest request,
+        HttpContext httpContext,
         AppDbContext dbContext,
         TokenService tokenService,
+        IOptions<JwtOptions> jwtOptions,
         CancellationToken cancellationToken)
     {
         var principal = tokenService.ValidateToken(request.Token);
@@ -148,9 +150,16 @@ public static class AuthEndpoints
         user.IsEmailConfirmed = true;
         user.UpdatedAt = DateTimeOffset.UtcNow;
 
+        var authResponse = CreateAuthSession(
+            user,
+            httpContext,
+            dbContext,
+            tokenService,
+            jwtOptions.Value);
+
         await dbContext.SaveChangesAsync(cancellationToken);
 
-        return Results.Ok(new { Message = "Email confirmed." });
+        return Results.Ok(authResponse);
     }
 
     private static async Task<IResult> LoginAsync(
