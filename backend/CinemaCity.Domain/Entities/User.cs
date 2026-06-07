@@ -23,4 +23,5 @@ public class User
     public ICollection<Comment> Comments { get; set; } = new List<Comment>();
     public ICollection<ReviewLike> ReviewLikes { get; set; } = new List<ReviewLike>();
     public ICollection<WatchlistItem> WatchlistItems { get; set; } = new List<WatchlistItem>();
+    public ICollection<UserMovieList> MovieLists { get; set; } = new List<UserMovieList>();
 }

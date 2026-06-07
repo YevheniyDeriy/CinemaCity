@@ -1,5 +1,6 @@
 using CinemaCity.API.Admin;
 using CinemaCity.API.Auth;
+using CinemaCity.API.Home;
 using CinemaCity.API.Movies;
 using CinemaCity.API.Profile;
 using CinemaCity.API.Ratings;
@@ -92,6 +93,7 @@ app.MapGet("/health/database", async (AppDbContext dbContext, CancellationToken 
 
 app.MapAuthEndpoints();
 app.MapAdminEndpoints();
+app.MapHomeEndpoints();
 app.MapMovieEndpoints();
 app.MapSeriesEndpoints();
 app.MapRatingEndpoints();

@@ -661,6 +661,73 @@ namespace CinemaCity.Infrastructure.Data.Migrations
                     b.ToTable("users", (string)null);
                 });
 
+            modelBuilder.Entity("CinemaCity.Domain.Entities.UserMovieList", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("description");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)")
+                        .HasColumnName("name");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("user_id");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId", "Name")
+                        .IsUnique();
+
+                    b.ToTable("user_movie_lists", (string)null);
+                });
+
+            modelBuilder.Entity("CinemaCity.Domain.Entities.UserMovieListItem", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("AddedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("added_at");
+
+                    b.Property<Guid>("MovieId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("movie_id");
+
+                    b.Property<Guid>("UserMovieListId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("user_movie_list_id");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("MovieId");
+
+                    b.HasIndex("UserMovieListId", "MovieId")
+                        .IsUnique();
+
+                    b.ToTable("user_movie_list_items", (string)null);
+                });
+
             modelBuilder.Entity("CinemaCity.Domain.Entities.WatchlistItem", b =>
                 {
                     b.Property<Guid>("Id")
@@ -881,6 +948,36 @@ namespace CinemaCity.Infrastructure.Data.Migrations
                     b.Navigation("Series");
                 });
 
+            modelBuilder.Entity("CinemaCity.Domain.Entities.UserMovieList", b =>
+                {
+                    b.HasOne("CinemaCity.Domain.Entities.User", "User")
+                        .WithMany("MovieLists")
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
+                });
+
+            modelBuilder.Entity("CinemaCity.Domain.Entities.UserMovieListItem", b =>
+                {
+                    b.HasOne("CinemaCity.Domain.Entities.Movie", "Movie")
+                        .WithMany("UserMovieListItems")
+                        .HasForeignKey("MovieId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("CinemaCity.Domain.Entities.UserMovieList", "UserMovieList")
+                        .WithMany("Items")
+                        .HasForeignKey("UserMovieListId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Movie");
+
+                    b.Navigation("UserMovieList");
+                });
+
             modelBuilder.Entity("CinemaCity.Domain.Entities.WatchlistItem", b =>
                 {
                     b.HasOne("CinemaCity.Domain.Entities.Movie", "Movie")
@@ -960,6 +1057,8 @@ namespace CinemaCity.Infrastructure.Data.Migrations
 
                     b.Navigation("Seasons");
 
+                    b.Navigation("UserMovieListItems");
+
                     b.Navigation("WatchlistItems");
                 });
 
@@ -984,6 +1083,8 @@ namespace CinemaCity.Infrastructure.Data.Migrations
                 {
                     b.Navigation("Comments");
 
+                    b.Navigation("MovieLists");
+
                     b.Navigation("Ratings");
 
                     b.Navigation("RefreshTokens");
@@ -993,6 +1094,11 @@ namespace CinemaCity.Infrastructure.Data.Migrations
                     b.Navigation("Reviews");
 
                     b.Navigation("WatchlistItems");
+                });
+
+            modelBuilder.Entity("CinemaCity.Domain.Entities.UserMovieList", b =>
+                {
+                    b.Navigation("Items");
                 });
 #pragma warning restore 612, 618
         }

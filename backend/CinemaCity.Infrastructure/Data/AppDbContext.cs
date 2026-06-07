@@ -21,6 +21,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<Comment> Comments => Set<Comment>();
     public DbSet<ReviewLike> ReviewLikes => Set<ReviewLike>();
     public DbSet<WatchlistItem> WatchlistItems => Set<WatchlistItem>();
+    public DbSet<UserMovieList> UserMovieLists => Set<UserMovieList>();
+    public DbSet<UserMovieListItem> UserMovieListItems => Set<UserMovieListItem>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -34,6 +36,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         ConfigureRatings(modelBuilder);
         ConfigureReviews(modelBuilder);
         ConfigureWatchlist(modelBuilder);
+        ConfigureUserMovieLists(modelBuilder);
     }
 
     private static void ConfigureUsers(ModelBuilder modelBuilder)
@@ -322,6 +325,37 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             entity.HasIndex(item => new { item.UserId, item.Status });
             entity.HasOne(item => item.User).WithMany(user => user.WatchlistItems).HasForeignKey(item => item.UserId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(item => item.Movie).WithMany(movie => movie.WatchlistItems).HasForeignKey(item => item.MovieId).OnDelete(DeleteBehavior.Cascade);
+        });
+    }
+
+    private static void ConfigureUserMovieLists(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<UserMovieList>(entity =>
+        {
+            entity.ToTable("user_movie_lists");
+            entity.HasKey(list => list.Id);
+            entity.Property(list => list.Id).HasColumnName("id");
+            entity.Property(list => list.UserId).HasColumnName("user_id");
+            entity.Property(list => list.Name).HasColumnName("name").HasMaxLength(80).IsRequired();
+            entity.Property(list => list.Description).HasColumnName("description").HasMaxLength(500);
+            entity.Property(list => list.CreatedAt).HasColumnName("created_at");
+            entity.Property(list => list.UpdatedAt).HasColumnName("updated_at");
+            entity.HasIndex(list => new { list.UserId, list.Name }).IsUnique();
+            entity.HasOne(list => list.User).WithMany(user => user.MovieLists).HasForeignKey(list => list.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<UserMovieListItem>(entity =>
+        {
+            entity.ToTable("user_movie_list_items");
+            entity.HasKey(item => item.Id);
+            entity.Property(item => item.Id).HasColumnName("id");
+            entity.Property(item => item.UserMovieListId).HasColumnName("user_movie_list_id");
+            entity.Property(item => item.MovieId).HasColumnName("movie_id");
+            entity.Property(item => item.AddedAt).HasColumnName("added_at");
+            entity.HasIndex(item => item.MovieId);
+            entity.HasIndex(item => new { item.UserMovieListId, item.MovieId }).IsUnique();
+            entity.HasOne(item => item.UserMovieList).WithMany(list => list.Items).HasForeignKey(item => item.UserMovieListId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(item => item.Movie).WithMany(movie => movie.UserMovieListItems).HasForeignKey(item => item.MovieId).OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

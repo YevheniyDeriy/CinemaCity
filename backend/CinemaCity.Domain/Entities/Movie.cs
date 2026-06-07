@@ -29,4 +29,5 @@ public class Movie
     public ICollection<Rating> Ratings { get; set; } = new List<Rating>();
     public ICollection<Review> Reviews { get; set; } = new List<Review>();
     public ICollection<WatchlistItem> WatchlistItems { get; set; } = new List<WatchlistItem>();
+    public ICollection<UserMovieListItem> UserMovieListItems { get; set; } = new List<UserMovieListItem>();
 }
