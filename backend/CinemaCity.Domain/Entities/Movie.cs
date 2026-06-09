@@ -5,12 +5,19 @@ namespace CinemaCity.Domain.Entities;
 public class Movie
 {
     public Guid Id { get; set; }
+    public int TmdbId { get; set; }
     public string Title { get; set; } = string.Empty;
     public string? OriginalTitle { get; set; }
     public ContentType ContentType { get; set; }
     public int ReleaseYear { get; set; }
     public int? Duration { get; set; }
     public string? Description { get; set; }
+    public string? Status { get; set; }
+    public string? Tagline { get; set; }
+    public DateOnly? FirstAirDate { get; set; }
+    public DateOnly? LastAirDate { get; set; }
+    public int? SeasonsCount { get; set; }
+    public int? EpisodesCount { get; set; }
     public string? PosterUrl { get; set; }
     public string? BackdropUrl { get; set; }
     public string? TrailerYoutubeId { get; set; }

@@ -67,6 +67,7 @@ public static class SeriesEndpoints
                         episode.SeasonId,
                         episode.EpisodeNumber,
                         episode.Title,
+                        episode.Description,
                         episode.AirDate,
                         episode.Duration,
                         episode.AverageRating,
@@ -210,6 +211,7 @@ public static class SeriesEndpoints
             SeasonId = seasonId,
             EpisodeNumber = request.EpisodeNumber,
             Title = request.Title.Trim(),
+            Description = TrimOrNull(request.Description),
             AirDate = request.AirDate,
             Duration = request.Duration
         };
@@ -253,6 +255,7 @@ public static class SeriesEndpoints
 
         episode.EpisodeNumber = request.EpisodeNumber;
         episode.Title = request.Title.Trim();
+        episode.Description = TrimOrNull(request.Description);
         episode.AirDate = request.AirDate;
         episode.Duration = request.Duration;
 
@@ -308,6 +311,11 @@ public static class SeriesEndpoints
             return "Duration must be greater than zero.";
         }
 
+        if (!string.IsNullOrWhiteSpace(request.Description) && request.Description.Length > 800)
+        {
+            return "Episode description must be at most 800 characters.";
+        }
+
         return null;
     }
 
@@ -330,6 +338,7 @@ public static class SeriesEndpoints
             episode.SeasonId,
             episode.EpisodeNumber,
             episode.Title,
+            episode.Description,
             episode.AirDate,
             episode.Duration,
             episode.AverageRating,
@@ -356,6 +365,7 @@ public sealed record EpisodeResponse(
     Guid SeasonId,
     int EpisodeNumber,
     string Title,
+    string? Description,
     DateOnly? AirDate,
     int? Duration,
     decimal AverageRating,
@@ -370,5 +380,6 @@ public sealed record SeasonUpsertRequest(
 public sealed record EpisodeUpsertRequest(
     int EpisodeNumber,
     string Title,
+    string? Description,
     DateOnly? AirDate,
     int? Duration);

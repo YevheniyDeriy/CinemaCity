@@ -110,6 +110,11 @@ namespace CinemaCity.Infrastructure.Data.Migrations
                         .HasColumnType("numeric(3,1)")
                         .HasColumnName("average_rating");
 
+                    b.Property<string>("Description")
+                        .HasMaxLength(800)
+                        .HasColumnType("character varying(800)")
+                        .HasColumnName("description");
+
                     b.Property<int?>("Duration")
                         .HasColumnType("integer")
                         .HasColumnName("duration");
@@ -161,6 +166,10 @@ namespace CinemaCity.Infrastructure.Data.Migrations
                         .HasColumnType("character varying(100)")
                         .HasColumnName("slug");
 
+                    b.Property<int>("TmdbId")
+                        .HasColumnType("integer")
+                        .HasColumnName("tmdb_id");
+
                     b.HasKey("Id");
 
                     b.HasIndex("Name")
@@ -168,6 +177,10 @@ namespace CinemaCity.Infrastructure.Data.Migrations
 
                     b.HasIndex("Slug")
                         .IsUnique();
+
+                    b.HasIndex("TmdbId")
+                        .IsUnique()
+                        .HasFilter("tmdb_id > 0");
 
                     b.ToTable("genres", (string)null);
                 });
@@ -241,9 +254,21 @@ namespace CinemaCity.Infrastructure.Data.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("duration");
 
+                    b.Property<int?>("EpisodesCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("episodes_count");
+
+                    b.Property<DateOnly?>("FirstAirDate")
+                        .HasColumnType("date")
+                        .HasColumnName("first_air_date");
+
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean")
                         .HasColumnName("is_deleted");
+
+                    b.Property<DateOnly?>("LastAirDate")
+                        .HasColumnType("date")
+                        .HasColumnName("last_air_date");
 
                     b.Property<string>("OriginalTitle")
                         .HasMaxLength(255)
@@ -262,11 +287,29 @@ namespace CinemaCity.Infrastructure.Data.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("release_year");
 
+                    b.Property<int?>("SeasonsCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("seasons_count");
+
+                    b.Property<string>("Status")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("status");
+
+                    b.Property<string>("Tagline")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)")
+                        .HasColumnName("tagline");
+
                     b.Property<string>("Title")
                         .IsRequired()
                         .HasMaxLength(255)
                         .HasColumnType("character varying(255)")
                         .HasColumnName("title");
+
+                    b.Property<int>("TmdbId")
+                        .HasColumnType("integer")
+                        .HasColumnName("tmdb_id");
 
                     b.Property<string>("TrailerYoutubeId")
                         .HasMaxLength(64)
@@ -286,6 +329,10 @@ namespace CinemaCity.Infrastructure.Data.Migrations
                     b.HasIndex("ReleaseYear");
 
                     b.HasIndex("AverageRating", "RatingsCount");
+
+                    b.HasIndex("ContentType", "TmdbId")
+                        .IsUnique()
+                        .HasFilter("tmdb_id > 0");
 
                     b.ToTable("movies", (string)null);
                 });
@@ -363,6 +410,10 @@ namespace CinemaCity.Infrastructure.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("photo_url");
 
+                    b.Property<int>("TmdbId")
+                        .HasColumnType("integer")
+                        .HasColumnName("tmdb_id");
+
                     b.Property<DateTimeOffset?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at");
@@ -370,6 +421,10 @@ namespace CinemaCity.Infrastructure.Data.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("FullName");
+
+                    b.HasIndex("TmdbId")
+                        .IsUnique()
+                        .HasFilter("tmdb_id > 0");
 
                     b.ToTable("persons", (string)null);
                 });
@@ -676,6 +731,10 @@ namespace CinemaCity.Infrastructure.Data.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)")
                         .HasColumnName("description");
+
+                    b.Property<bool>("IsPublic")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_public");
 
                     b.Property<string>("Name")
                         .IsRequired()

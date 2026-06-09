@@ -1,3 +1,4 @@
+using CinemaCity.API;
 using CinemaCity.API.Admin;
 using CinemaCity.API.Auth;
 using CinemaCity.API.Home;
@@ -8,6 +9,8 @@ using CinemaCity.API.Reviews;
 using CinemaCity.API.Search;
 using CinemaCity.API.Series;
 using CinemaCity.Application;
+using CinemaCity.Domain.Entities;
+using CinemaCity.Domain.Enums;
 using CinemaCity.Infrastructure;
 using CinemaCity.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -50,9 +53,26 @@ builder.Services.AddSwaggerGen(options =>
         Description = "Вставте JWT access token з відповіді login без префікса Bearer."
     });
 
+    options.AddSecurityRequirement(document => new OpenApiSecurityRequirement
+    {
+        [new OpenApiSecuritySchemeReference("Bearer", document, null)] = []
+    });
 });
 
 var app = builder.Build();
+
+using (var scope = app.Services.CreateScope())
+{
+    var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await dbContext.Database.MigrateAsync();
+    await EnsureSampleEpisodesAsync(dbContext);
+}
+
+if (app.Environment.IsDevelopment())
+{
+    var seedLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("DevelopmentDataSeeder");
+    await DevelopmentDataSeeder.SeedAsync(app.Services, seedLogger);
+}
 
 if (app.Environment.IsDevelopment())
 {
@@ -102,3 +122,87 @@ app.MapProfileEndpoints();
 app.MapSearchEndpoints();
 
 app.Run();
+
+static async Task EnsureSampleEpisodesAsync(AppDbContext dbContext)
+{
+    if (await dbContext.Seasons.AnyAsync())
+    {
+        return;
+    }
+
+    var series = await dbContext.Movies
+        .Where(movie => !movie.IsDeleted && movie.ContentType == ContentType.Series)
+        .OrderByDescending(movie => movie.AverageRating)
+        .FirstOrDefaultAsync();
+
+    if (series is null)
+    {
+        return;
+    }
+
+    var season = new Season
+    {
+        Id = Guid.NewGuid(),
+        SeriesId = series.Id,
+        SeasonNumber = 1,
+        Title = "Перший сезон",
+        Description = "Тестовий сезон для перевірки рейтингової таблиці епізодів.",
+        ReleaseYear = series.ReleaseYear
+    };
+
+    var episodes = new[]
+    {
+        new Episode
+        {
+            Id = Guid.NewGuid(),
+            SeasonId = season.Id,
+            EpisodeNumber = 1,
+            Title = "Початок",
+            Description = "Герої входять у конфлікт, який задає тон усьому сезону.",
+            AirDate = new DateOnly(series.ReleaseYear, 1, 20),
+            Duration = 48,
+            AverageRating = 8.4m,
+            RatingsCount = 420
+        },
+        new Episode
+        {
+            Id = Guid.NewGuid(),
+            SeasonId = season.Id,
+            EpisodeNumber = 2,
+            Title = "Наслідки",
+            Description = "Перші рішення повертаються несподіваними наслідками.",
+            AirDate = new DateOnly(series.ReleaseYear, 1, 27),
+            Duration = 46,
+            AverageRating = 8.7m,
+            RatingsCount = 515
+        },
+        new Episode
+        {
+            Id = Guid.NewGuid(),
+            SeasonId = season.Id,
+            EpisodeNumber = 3,
+            Title = "Точка кипіння",
+            Description = "Напруга росте, а довіра між персонажами починає ламатися.",
+            AirDate = new DateOnly(series.ReleaseYear, 2, 3),
+            Duration = 50,
+            AverageRating = 9.1m,
+            RatingsCount = 610
+        },
+        new Episode
+        {
+            Id = Guid.NewGuid(),
+            SeasonId = season.Id,
+            EpisodeNumber = 4,
+            Title = "Без повернення",
+            Description = "Сезон переходить у фазу, де кожен вибір має ціну.",
+            AirDate = new DateOnly(series.ReleaseYear, 2, 10),
+            Duration = 49,
+            AverageRating = 8.2m,
+            RatingsCount = 388
+        }
+    };
+
+    dbContext.Seasons.Add(season);
+    dbContext.Episodes.AddRange(episodes);
+    await dbContext.SaveChangesAsync();
+}

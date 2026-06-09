@@ -130,6 +130,7 @@ type EpisodeDetails = {
   seasonId: string;
   episodeNumber: number;
   title: string;
+  description?: string | null;
   airDate?: string | null;
   duration?: number | null;
   averageRating: number;
@@ -222,6 +223,7 @@ type MovieListSummary = {
   id: string;
   name: string;
   description?: string | null;
+  isPublic: boolean;
   itemsCount: number;
   createdAt: string;
   updatedAt?: string | null;
@@ -307,11 +309,14 @@ function App() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [confirmationToken, setConfirmationToken] = useState('');
   const [accessToken, setAccessToken] = useState('');
+  const [accessTokenExpiresAt, setAccessTokenExpiresAt] = useState('');
   const [user, setUser] = useState<AuthUser | null>(null);
   const [message, setMessage] = useState('');
   const [passwordError, setPasswordError] = useState('');
+  const [isAuthReady, setIsAuthReady] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const didRestoreAuthRef = useRef(false);
 
   const googleLoginUrl = useMemo(() => {
     const returnUrl = typeof window === 'undefined' ? '/auth' : `${window.location.origin}/auth?google=success`;
@@ -339,44 +344,101 @@ function App() {
     }, 4200);
   }
 
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
+  function applyAuthSession(auth: AuthResponse) {
+    setAccessToken(auth.accessToken);
+    setAccessTokenExpiresAt(auth.accessTokenExpiresAt);
+    setUser(auth.user);
+  }
 
-    if (params.get('google') !== 'success') {
-      return;
-    }
+  function clearAuthSession() {
+    setAccessToken('');
+    setAccessTokenExpiresAt('');
+    setUser(null);
+  }
 
-    window.history.replaceState({}, '', '/auth');
-    setIsBusy(true);
-
-    fetch(`${apiUrl}/api/auth/refresh`, {
+  async function refreshAuthSession(): Promise<AuthResponse> {
+    const response = await fetch(`${apiUrl}/api/auth/refresh`, {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({})
-    })
-      .then(async (response) => {
-        const text = await response.text();
-        const data = text ? JSON.parse(text) : null;
+    });
 
-        if (!response.ok) {
-          throw new Error(data?.message ?? data?.detail ?? 'Не вдалося відкрити ваш профіль.');
+    if (response.status === 401) {
+      throw new Error('Unauthorized');
+    }
+
+    const data = await readResponseBody(response);
+
+    if (!response.ok) {
+      throw new Error(getApiErrorMessage(data, 'Не вдалося відкрити ваш профіль.'));
+    }
+
+    const auth = data as AuthResponse;
+    applyAuthSession(auth);
+    return auth;
+  }
+
+  useEffect(() => {
+    if (didRestoreAuthRef.current) {
+      return;
+    }
+
+    didRestoreAuthRef.current = true;
+
+    const params = new URLSearchParams(window.location.search);
+    const isGoogleReturn = params.get('google') === 'success';
+
+    if (isGoogleReturn) {
+      window.history.replaceState({}, '', '/auth');
+    }
+
+    setIsBusy(true);
+
+    refreshAuthSession()
+      .then(() => {
+        if (isGoogleReturn) {
+          setMessage('Вхід через Google завершено. Приємного перегляду.');
+          notify('Вхід через Google завершено.', 'success');
+        }
+      })
+      .catch((error) => {
+        clearAuthSession();
+        if (isGoogleReturn) {
+          setMessage('Google повернув вас у CinemaCity. Спробуйте увійти ще раз.');
+          notify('Не вдалося завершити Google-вхід.', 'error');
+        } else if (error instanceof Error && error.message !== 'Unauthorized') {
+          notify('Не вдалося відновити сесію.', 'error');
+        }
+      })
+      .finally(() => {
+        setIsBusy(false);
+        setIsAuthReady(true);
+      });
+  }, []);
+
+  useEffect(() => {
+    if (!user || !accessTokenExpiresAt) {
+      return;
+    }
+
+    const expiresAt = new Date(accessTokenExpiresAt).getTime();
+    const refreshInMs = Math.max(expiresAt - Date.now() - 60_000, 5_000);
+
+    const refreshTimer = window.setTimeout(() => {
+      refreshAuthSession().catch((error) => {
+        if (error instanceof Error && error.message === 'Unauthorized') {
+          clearAuthSession();
+          notify('Сесію завершено. Увійдіть ще раз.', 'error');
+          return;
         }
 
-        return data as AuthResponse;
-      })
-      .then((result) => {
-        setAccessToken(result.accessToken);
-        setUser(result.user);
-        setMessage('Вхід через Google завершено. Приємного перегляду.');
-        notify('Вхід через Google завершено.', 'success');
-      })
-      .catch(() => {
-        setMessage('Google повернув вас у CinemaCity. Спробуйте увійти ще раз.');
-        notify('Не вдалося завершити Google-вхід.', 'error');
-      })
-      .finally(() => setIsBusy(false));
-  }, []);
+        notify('Не вдалося оновити сесію.', 'error');
+      });
+    }, refreshInMs);
+
+    return () => window.clearTimeout(refreshTimer);
+  }, [accessTokenExpiresAt, user]);
 
   async function request<T>(path: string, options: RequestInit): Promise<T> {
     const response = await fetch(`${apiUrl}${path}`, {
@@ -389,11 +451,10 @@ function App() {
       }
     });
 
-    const text = await response.text();
-    const data = text ? JSON.parse(text) : null;
+    const data = await readResponseBody(response);
 
     if (!response.ok) {
-      throw new Error(toFriendlyMessage(data?.message ?? data?.detail));
+      throw new Error(getApiErrorMessage(data));
     }
 
     return data as T;
@@ -436,14 +497,16 @@ function App() {
     setIsBusy(true);
 
     try {
-      await request('/api/auth/confirm-email', {
+      const auth = await request<AuthResponse>('/api/auth/confirm-email', {
         method: 'POST',
         body: JSON.stringify({ token: confirmationToken })
       });
 
       setConfirmationToken('');
+      applyAuthSession(auth);
       setMode('login');
-      setMessage('Пошту підтверджено. Тепер можна увійти.');
+      setMessage('Пошту підтверджено. Ви увійшли в CinemaCity.');
+      notify('Пошту підтверджено. Ви увійшли.', 'success');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Не вдалося підтвердити пошту.');
     } finally {
@@ -461,8 +524,7 @@ function App() {
         body: JSON.stringify({ email, password })
       });
 
-      setAccessToken(result.accessToken);
-      setUser(result.user);
+      applyAuthSession(result);
       setMessage('Ви увійшли в CinemaCity.');
       notify('Ви увійшли в CinemaCity.', 'success');
     } catch (error) {
@@ -483,8 +545,7 @@ function App() {
         body: JSON.stringify({})
       });
 
-      setAccessToken('');
-      setUser(null);
+      clearAuthSession();
       setMessage('Ви вийшли з акаунта.');
       notify('Ви вийшли з акаунта.', 'info');
     } catch (error) {
@@ -498,14 +559,14 @@ function App() {
 
   return (
     <ToastContext.Provider value={{ notify }}>
-      <HeaderAuthContext.Provider value={{ user, isBusy, handleLogout }}>
+      <HeaderAuthContext.Provider value={{ user, isBusy: isBusy || !isAuthReady, handleLogout }}>
         <BrowserRouter>
           <Routes>
             <Route path="/" element={<HomePage accessToken={accessToken} user={user} />} />
             <Route path="/catalog" element={<CatalogPage />} />
             <Route path="/search" element={<SearchPage />} />
-            <Route path="/profile" element={user && accessToken ? <ProfilePage accessToken={accessToken} user={user} /> : <Navigate to="/auth" replace />} />
-            <Route path="/admin" element={user && accessToken && Number(user.role) === 1 ? <AdminPage accessToken={accessToken} /> : <Navigate to="/auth" replace />} />
+            <Route path="/profile" element={!isAuthReady ? <AuthGate /> : user && accessToken ? <ProfilePage accessToken={accessToken} user={user} /> : <Navigate to="/auth" replace />} />
+            <Route path="/admin" element={!isAuthReady ? <AuthGate /> : user && accessToken && Number(user.role) === 1 ? <AdminPage accessToken={accessToken} /> : <Navigate to="/auth" replace />} />
             <Route path="/movies/:id" element={<MovieDetailsPage accessToken={accessToken} user={user} />} />
             <Route
               path="/auth"
@@ -695,12 +756,35 @@ function HomeMovieRail({ title, description, items }: { title: string; descripti
           Каталог
         </Link>
       </div>
-      <div className="home-rail-scroll">
+      <MovieCarousel items={items} label={title} />
+    </section>
+  );
+}
+
+function MovieCarousel({ items, label }: { items: MovieCard[]; label: string }) {
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+
+  function scroll(direction: -1 | 1) {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+
+    scroller.scrollBy({ left: direction * Math.max(scroller.clientWidth * 0.82, 260), behavior: 'smooth' });
+  }
+
+  return (
+    <div className="movie-carousel" aria-label={label}>
+      <button className="rail-arrow left" type="button" onClick={() => scroll(-1)} aria-label="Прокрутити ліворуч">
+        ‹
+      </button>
+      <div className="home-rail-scroll" ref={scrollerRef}>
         {items.map((movie) => (
           <MovieCardLink key={movie.id} movie={movie} />
         ))}
       </div>
-    </section>
+      <button className="rail-arrow right" type="button" onClick={() => scroll(1)} aria-label="Прокрутити праворуч">
+        ›
+      </button>
+    </div>
   );
 }
 
@@ -797,7 +881,7 @@ function SiteHeader() {
             {isUserMenuOpen ? (
               <div className="user-menu-popover">
                 <Link to="/profile">Профіль</Link>
-                <Link to="/profile?tab=watchlist">Watchlist</Link>
+                <Link to="/profile?tab=watchlist">Хочу переглянути</Link>
                 <Link to="/profile?tab=watched">Переглянуто</Link>
                 <button disabled={isBusy} type="button" onClick={handleLogout}>
                   Вийти
@@ -805,6 +889,10 @@ function SiteHeader() {
               </div>
             ) : null}
           </div>
+        ) : isBusy ? (
+          <button className="nav-status" disabled type="button">
+            Перевіряємо
+          </button>
         ) : (
           <NavLink to="/auth">Увійти</NavLink>
         )}
@@ -1729,7 +1817,7 @@ function ProfilePage({ accessToken, user }: { accessToken: string; user: AuthUse
             </article>
             <article>
               <strong>{stats?.watchlistCount ?? 0}</strong>
-              <span>Watchlist</span>
+              <span>Хочу переглянути</span>
             </article>
             <article>
               <strong>{stats?.reviewsCount ?? 0}</strong>
@@ -1747,7 +1835,7 @@ function ProfilePage({ accessToken, user }: { accessToken: string; user: AuthUse
             Профіль
           </Link>
           <Link className={activeTab === 'watchlist' ? 'active' : ''} to="/profile?tab=watchlist">
-            Watchlist
+            Хочу переглянути
           </Link>
           <Link className={activeTab === 'watched' ? 'active' : ''} to="/profile?tab=watched">
             Переглянуто
@@ -1763,7 +1851,7 @@ function ProfilePage({ accessToken, user }: { accessToken: string; user: AuthUse
         {message ? <StatusMessage tone="danger">{message}</StatusMessage> : null}
 
         {activeTab === 'watchlist' ? (
-          <ProfileMovieSection title="Watchlist" items={watchlist} emptyText="У watchlist поки нічого немає." />
+          <ProfileMovieSection title="Хочу переглянути" items={watchlist} emptyText="У списку “Хочу переглянути” поки нічого немає." />
         ) : null}
 
         {activeTab === 'watched' ? (
@@ -1805,7 +1893,7 @@ function ProfilePage({ accessToken, user }: { accessToken: string; user: AuthUse
                 </article>
                 <article>
                   <strong>{stats?.watchlistCount ?? 0}</strong>
-                  <span>У watchlist</span>
+                  <span>Хочу переглянути</span>
                 </article>
                 <article>
                   <strong>{stats?.ratingsCount ?? 0}</strong>
@@ -1825,7 +1913,7 @@ function ProfilePage({ accessToken, user }: { accessToken: string; user: AuthUse
               ) : null}
             </section>
 
-            <ProfileMovieSection title="Останні додані" items={recentItems} emptyText="Додавайте фільми у watchlist або переглянуте, і вони з’являться тут." />
+            <ProfileMovieSection title="Останні додані" items={recentItems} emptyText="Додавайте фільми у “Хочу переглянути” або переглянуте, і вони з’являться тут." />
           </>
         ) : null}
 
@@ -1868,6 +1956,7 @@ function ProfileListsPanel({
   const [selectedList, setSelectedList] = useState<MovieListDetails | null>(null);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [isPublic, setIsPublic] = useState(false);
   const [editingId, setEditingId] = useState('');
 
   useEffect(() => {
@@ -1906,19 +1995,21 @@ function ProfileListsPanel({
     setEditingId(list.id);
     setName(list.name);
     setDescription(list.description ?? '');
+    setIsPublic(list.isPublic);
   }
 
   function resetForm() {
     setEditingId('');
     setName('');
     setDescription('');
+    setIsPublic(false);
   }
 
   async function submitList(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     try {
-      const payload = { name, description: description || null };
+      const payload = { name, description: description || null, isPublic };
 
       if (editingId) {
         await authedRequest(`/api/profile/lists/${editingId}`, accessToken, {
@@ -1983,6 +2074,10 @@ function ProfileListsPanel({
           Опис
           <textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={500} />
         </label>
+        <label className="checkbox-row">
+          <input type="checkbox" checked={isPublic} onChange={(event) => setIsPublic(event.target.checked)} />
+          Публічний список
+        </label>
         <button className="primary-action" type="submit">
           {editingId ? 'Зберегти' : 'Створити'}
         </button>
@@ -1994,7 +2089,9 @@ function ProfileListsPanel({
             lists.map((list) => (
               <button className={selectedListId === list.id ? 'active' : ''} key={list.id} type="button" onClick={() => setSelectedListId(list.id)}>
                 <strong>{list.name}</strong>
-                <span>{list.itemsCount} назв</span>
+                <span>
+                  {list.itemsCount} назв · {list.isPublic ? 'публічний' : 'приватний'}
+                </span>
               </button>
             ))
           ) : (
@@ -2009,6 +2106,7 @@ function ProfileListsPanel({
                 <div>
                   <h2>{selectedList.name}</h2>
                   {selectedList.description ? <p>{selectedList.description}</p> : null}
+                  <p>{selectedList.isPublic ? 'Публічний список' : 'Приватний список'}</p>
                 </div>
                 <div className="list-actions">
                   <button type="button" onClick={() => startEditList(selectedList)}>
@@ -2184,7 +2282,7 @@ function ProfileStatsPanel({ accessToken }: { accessToken: string }) {
           <div className="profile-stats-grid">
             <article>
               <strong>{stats.watchlistCount}</strong>
-              <span>У watchlist</span>
+              <span>Хочу переглянути</span>
             </article>
             <article>
               <strong>{stats.watchedCount}</strong>
@@ -2218,7 +2316,7 @@ function ProfileStatsPanel({ accessToken }: { accessToken: string }) {
         </>
       ) : null}
 
-      <ProfileMovieRail title="Watchlist" items={watchlist} />
+      <ProfileMovieRail title="Хочу переглянути" items={watchlist} />
       <ProfileMovieRail title="Переглянуто" items={watched} />
     </section>
   );
@@ -2229,14 +2327,7 @@ function ProfileMovieRail({ title, items }: { title: string; items: WatchlistIte
     <div className="profile-rail">
       <h4>{title}</h4>
       {items.length ? (
-        <div>
-          {items.slice(0, 6).map((item) => (
-            <Link key={item.id} to={`/movies/${item.movieId}`}>
-              {item.posterUrl ? <img src={item.posterUrl} alt="" loading="lazy" /> : <span>{getInitials(item.title)}</span>}
-              <strong>{item.title}</strong>
-            </Link>
-          ))}
-        </div>
+        <MovieCarousel items={items.slice(0, 8).map((item) => ({ ...item, id: item.movieId }))} label={title} />
       ) : (
         <p className="muted-text">Поки порожньо.</p>
       )}
@@ -2592,15 +2683,21 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
   const [commentInputs, setCommentInputs] = useState<Record<string, string>>({});
   const [userState, setUserState] = useState<MovieUserState | null>(null);
   const [customLists, setCustomLists] = useState<MovieListSummary[]>([]);
-  const [selectedCustomListId, setSelectedCustomListId] = useState('');
-  const [newCustomListName, setNewCustomListName] = useState('');
+  const [isListModalOpen, setIsListModalOpen] = useState(false);
+  const [selectedModalListIds, setSelectedModalListIds] = useState<string[]>([]);
+  const [newModalListName, setNewModalListName] = useState('');
+  const [newModalListIsPublic, setNewModalListIsPublic] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
   const [error, setError] = useState('');
   const [actionMessage, setActionMessage] = useState('');
   const [movieRating, setMovieRating] = useState('8');
+  const [ratingDraft, setRatingDraft] = useState('8');
+  const [isRatingModalOpen, setIsRatingModalOpen] = useState(false);
   const [episodeRatings, setEpisodeRatings] = useState<Record<string, string>>({});
+  const [activeSeasonId, setActiveSeasonId] = useState('');
+  const [selectedEpisodeId, setSelectedEpisodeId] = useState('');
   const [reviewContent, setReviewContent] = useState('');
   const [reviewSpoiler, setReviewSpoiler] = useState(false);
   const [editingReviewId, setEditingReviewId] = useState('');
@@ -2660,6 +2757,9 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
         setCommentsByReview(Object.fromEntries(commentsResult));
         setUserState(stateResult);
         setMovieRating(stateResult?.rating?.score ? String(stateResult.rating.score) : '8');
+        setRatingDraft(stateResult?.rating?.score ? String(stateResult.rating.score) : '8');
+        setActiveSeasonId(seasonResult[0]?.id || '');
+        setSelectedEpisodeId(seasonResult[0]?.episodes[0]?.id || '');
       })
       .catch((fetchError) => {
         if (fetchError instanceof DOMException && fetchError.name === 'AbortError') {
@@ -2682,16 +2782,12 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
   useEffect(() => {
     if (!accessToken || !user) {
       setCustomLists([]);
-      setSelectedCustomListId('');
       return;
     }
 
     const controller = new AbortController();
     authedRequest<MovieListSummary[]>('/api/profile/lists', accessToken, { signal: controller.signal })
-      .then((lists) => {
-        setCustomLists(lists);
-        setSelectedCustomListId((current) => current || lists[0]?.id || '');
-      })
+      .then(setCustomLists)
       .catch(() => setCustomLists([]));
 
     return () => controller.abort();
@@ -2700,14 +2796,14 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
   async function submitRating(target: { movieId?: string; episodeId?: string }, scoreValue: string) {
     if (!accessToken) {
       setActionMessage('Щоб поставити оцінку, увійдіть в акаунт.');
-      return;
+      return false;
     }
 
     const score = Number(scoreValue);
 
     if (!Number.isFinite(score) || score < 1 || score > 10) {
       setActionMessage('Оцінка має бути від 1 до 10.');
-      return;
+      return false;
     }
 
     setIsSubmitting(true);
@@ -2720,20 +2816,49 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
         body: JSON.stringify(existingMovieRatingId ? { score } : { ...target, score })
       });
       setUserState((current) => (target.movieId ? { ...(current ?? {}), rating: { id: response.id, score: response.score } } : current));
+      if (target.movieId) {
+        setMovieRating(String(response.score));
+        setRatingDraft(String(response.score));
+      }
       setRefreshTick((value) => value + 1);
       setActionMessage('Оцінку збережено.');
+      return true;
     } catch (requestError) {
       setActionMessage(requestError instanceof Error ? requestError.message : 'Не вдалося зберегти оцінку.');
+      return false;
     } finally {
       setIsSubmitting(false);
     }
   }
 
-  async function setWatchlistStatus(status: 'Watchlist' | 'Watched') {
+  async function submitMovieRatingFromModal() {
     if (!movie) return;
 
-    if (!accessToken) {
-      setActionMessage('Щоб додати фільм у список, увійдіть в акаунт.');
+    const saved = await submitRating({ movieId: movie.id }, ratingDraft);
+    if (saved) {
+      setIsRatingModalOpen(false);
+    }
+  }
+
+  function openListModal() {
+    if (!movie) return;
+
+    if (!accessToken || !user) {
+      setActionMessage('Щоб додати фільм у власний список, увійдіть в акаунт.');
+      return;
+    }
+
+    setSelectedModalListIds(userState?.lists?.map((list) => list.id) ?? []);
+    setNewModalListName('');
+    setNewModalListIsPublic(true);
+    setIsListModalOpen(true);
+  }
+
+  async function toggleWatchlist() {
+    if (!movie) return;
+
+    if (!accessToken || !user) {
+      setActionMessage('Щоб додати фільм у “Хочу переглянути”, увійдіть в акаунт.');
       return;
     }
 
@@ -2741,43 +2866,35 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
     setActionMessage('');
 
     try {
-      const result = await authedRequest<WatchlistItem>('/api/profile/watchlist', accessToken, {
+      const currentStatus = normalizeWatchlistStatus(userState?.watchlistStatus);
+
+      if (currentStatus === 'Watchlist') {
+        await authedRequest(`/api/profile/watchlist/${movie.id}`, accessToken, { method: 'DELETE' });
+        setUserState((current) => ({ ...(current ?? {}), watchlistStatus: null, addedAt: null }));
+        setActionMessage('Видалено з “Хочу переглянути”.');
+        return;
+      }
+
+      const watchlistItem = await authedRequest<WatchlistItem>('/api/profile/watchlist', accessToken, {
         method: 'POST',
-        body: JSON.stringify({ movieId: movie.id, status: status === 'Watched' ? 1 : 0 })
+        body: JSON.stringify({ movieId: movie.id, status: 0 })
       });
-      setUserState((current) => ({ ...(current ?? {}), watchlistStatus: result.status, addedAt: result.addedAt }));
-      setActionMessage(status === 'Watched' ? 'Додано до переглянутого.' : 'Додано у watchlist.');
+      setUserState((current) => ({ ...(current ?? {}), watchlistStatus: watchlistItem.status, addedAt: watchlistItem.addedAt }));
+      setActionMessage('Додано в “Хочу переглянути”.');
     } catch (requestError) {
-      setActionMessage(requestError instanceof Error ? requestError.message : 'Не вдалося оновити список.');
+      setActionMessage(requestError instanceof Error ? requestError.message : 'Не вдалося оновити “Хочу переглянути”.');
     } finally {
       setIsSubmitting(false);
     }
   }
 
-  async function removeFromWatchlist() {
-    if (!movie || !accessToken) return;
-
-    setIsSubmitting(true);
-    setActionMessage('');
-
-    try {
-      await authedRequest(`/api/profile/watchlist/${movie.id}`, accessToken, { method: 'DELETE' });
-      setUserState((current) => ({ ...(current ?? {}), watchlistStatus: null, addedAt: null }));
-      setActionMessage('Фільм прибрано зі списків.');
-    } catch (requestError) {
-      setActionMessage(requestError instanceof Error ? requestError.message : 'Не вдалося оновити список.');
-    } finally {
-      setIsSubmitting(false);
-    }
-  }
-
-  async function createCustomList() {
+  async function createModalList() {
     if (!accessToken) {
       setActionMessage('Щоб створити список, увійдіть в акаунт.');
       return;
     }
 
-    const trimmedName = newCustomListName.trim();
+    const trimmedName = newModalListName.trim();
     if (!trimmedName) {
       setActionMessage('Вкажіть назву списку.');
       return;
@@ -2786,60 +2903,77 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
     try {
       const created = await authedRequest<MovieListSummary>('/api/profile/lists', accessToken, {
         method: 'POST',
-        body: JSON.stringify({ name: trimmedName, description: null })
+        body: JSON.stringify({ name: trimmedName, description: null, isPublic: newModalListIsPublic })
       });
 
       setCustomLists((current) => [created, ...current]);
-      setSelectedCustomListId(created.id);
-      setNewCustomListName('');
-      setActionMessage('Список створено.');
+      setSelectedModalListIds((current) => [...new Set([...current, created.id])]);
+      setNewModalListName('');
     } catch (requestError) {
       setActionMessage(requestError instanceof Error ? requestError.message : 'Не вдалося створити список.');
     }
   }
 
-  async function addToCustomList() {
-    if (!accessToken || !movie || !selectedCustomListId) {
-      setActionMessage('Оберіть список або створіть новий.');
-      return;
-    }
-
-    try {
-      await authedRequest(`/api/profile/lists/${selectedCustomListId}/items`, accessToken, {
-        method: 'POST',
-        body: JSON.stringify({ movieId: movie.id })
-      });
-
-      const listName = customLists.find((list) => list.id === selectedCustomListId)?.name ?? 'список';
-      setUserState((current) => ({
-        ...(current ?? {}),
-        lists: [
-          ...(current?.lists?.filter((list) => list.id !== selectedCustomListId) ?? []),
-          { id: selectedCustomListId, name: listName }
-        ]
-      }));
-      setCustomLists((current) => current.map((list) => (list.id === selectedCustomListId ? { ...list, itemsCount: list.itemsCount + 1 } : list)));
-      setActionMessage(`Додано у список “${listName}”.`);
-    } catch (requestError) {
-      setActionMessage(requestError instanceof Error ? requestError.message : 'Не вдалося додати у список.');
-    }
-  }
-
-  async function removeFromCustomList(listId: string) {
+  async function saveListModal() {
     if (!accessToken || !movie) {
       return;
     }
 
+    setIsSubmitting(true);
+    setActionMessage('');
+
     try {
-      await authedRequest(`/api/profile/lists/${listId}/items/${movie.id}`, accessToken, { method: 'DELETE' });
+      const existingIds = new Set(userState?.lists?.map((list) => list.id) ?? []);
+      const selectedIds = new Set(selectedModalListIds);
+      const selectedMemberships = customLists
+        .filter((list) => selectedIds.has(list.id))
+        .map((list) => ({ id: list.id, name: list.name }));
+
+      if (!selectedMemberships.length) {
+        setActionMessage('Оберіть власний список або створіть новий.');
+        return;
+      }
+
+      await Promise.all(
+        selectedModalListIds
+          .filter((listId) => !existingIds.has(listId))
+          .map((listId) =>
+            authedRequest(`/api/profile/lists/${listId}/items`, accessToken, {
+              method: 'POST',
+              body: JSON.stringify({ movieId: movie.id })
+            })
+          )
+      );
+
+      await Promise.all(
+        [...existingIds]
+          .filter((listId) => !selectedIds.has(listId))
+          .map((listId) => authedRequest(`/api/profile/lists/${listId}/items/${movie.id}`, accessToken, { method: 'DELETE' }))
+      );
+
       setUserState((current) => ({
         ...(current ?? {}),
-        lists: current?.lists?.filter((list) => list.id !== listId) ?? []
+        lists: selectedMemberships
       }));
-      setCustomLists((current) => current.map((list) => (list.id === listId ? { ...list, itemsCount: Math.max(list.itemsCount - 1, 0) } : list)));
-      setActionMessage('Прибрано з користувацького списку.');
+      setCustomLists((current) =>
+        current.map((list) => {
+          const wasSelected = existingIds.has(list.id);
+          const isSelected = selectedIds.has(list.id);
+
+          if (wasSelected === isSelected) return list;
+
+          return {
+            ...list,
+            itemsCount: Math.max(list.itemsCount + (isSelected ? 1 : -1), 0)
+          };
+        })
+      );
+      setActionMessage(`Додано у списки: ${selectedMemberships.map((list) => `“${list.name}”`).join(', ')}.`);
+      setIsListModalOpen(false);
     } catch (requestError) {
-      setActionMessage(requestError instanceof Error ? requestError.message : 'Не вдалося прибрати зі списку.');
+      setActionMessage(requestError instanceof Error ? requestError.message : 'Не вдалося оновити списки.');
+    } finally {
+      setIsSubmitting(false);
     }
   }
 
@@ -2963,6 +3097,12 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
   }
 
   const currentWatchlistStatus = normalizeWatchlistStatus(userState?.watchlistStatus);
+  const selectedModalLists = customLists.filter((list) => selectedModalListIds.includes(list.id));
+  const activeSeason = seasons.find((season) => season.id === activeSeasonId) ?? seasons[0] ?? null;
+  const selectedEpisode = activeSeason?.episodes.find((episode) => episode.id === selectedEpisodeId) ?? activeSeason?.episodes[0] ?? null;
+  const seasonAverageRating = activeSeason?.episodes.length
+    ? activeSeason.episodes.reduce((sum, episode) => sum + Number(episode.averageRating), 0) / activeSeason.episodes.length
+    : 0;
 
   return (
     <main className="page-shell">
@@ -2997,28 +3137,46 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
               <article>
                 <span>ВАША ОЦІНКА</span>
                 {user ? (
-                  <div className="inline-rating">
-                    <StarRatingInput value={Number(movieRating)} onChange={(value) => setMovieRating(String(value))} />
-                    <button disabled={isSubmitting} type="button" onClick={() => submitRating({ movieId: movie.id }, movieRating)}>
-                      ★ Оцінити
-                    </button>
-                  </div>
+                  <button
+                    className="rating-open-button"
+                    disabled={isSubmitting}
+                    type="button"
+                    onClick={() => {
+                      setRatingDraft(movieRating);
+                      setIsRatingModalOpen(true);
+                    }}
+                  >
+                    <strong>{userState?.rating ? `★ ${formatRating(userState.rating.score)}/10` : 'Оцінити'}</strong>
+                    <small>{userState?.rating ? 'Змінити оцінку' : 'Відкрити вікно оцінки'}</small>
+                  </button>
                 ) : (
                   <Link to="/auth">★ Увійти</Link>
                 )}
               </article>
               <article>
                 <span>СПИСОК</span>
-                <strong>{formatWatchlistStatus(currentWatchlistStatus)}</strong>
-                <small>{currentWatchlistStatus ? 'Збережено у профілі' : 'Не додано'}</small>
+                {user ? (
+                  <button className="score-action-button" disabled={isSubmitting} type="button" onClick={toggleWatchlist}>
+                    <strong>{currentWatchlistStatus === 'Watchlist' ? '✓ Хочу переглянути' : 'Додати'}</strong>
+                    <small>{currentWatchlistStatus === 'Watchlist' ? 'Натисніть, щоб прибрати' : 'У “Хочу переглянути”'}</small>
+                  </button>
+                ) : (
+                  <Link to="/auth">+ Увійти</Link>
+                )}
               </article>
             </div>
           </div>
 
           <div className="movie-media-layout">
             <div className="movie-poster-large">
-              <button disabled={isSubmitting} type="button" onClick={() => setWatchlistStatus('Watchlist')} aria-label="Додати у watchlist">
-                +
+              <button
+                className={userState?.lists?.length ? 'active' : ''}
+                disabled={isSubmitting}
+                type="button"
+                onClick={openListModal}
+                aria-label="Відкрити власні списки"
+              >
+                {userState?.lists?.length ? '✓' : '+'}
               </button>
               {movie.posterUrl ? <img src={movie.posterUrl} alt="" /> : <span>{getInitials(movie.title)}</span>}
             </div>
@@ -3041,54 +3199,6 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
                 <span>{movie.description || 'Опис для цієї назви ще не додано.'}</span>
               </div>
             </div>
-
-            <aside className="movie-side-actions">
-              <button disabled={isSubmitting} type="button" onClick={() => setWatchlistStatus('Watchlist')}>
-                + Watchlist
-              </button>
-              <button disabled={isSubmitting} type="button" onClick={() => setWatchlistStatus('Watched')}>
-                ✓ Переглянуто
-              </button>
-              {currentWatchlistStatus ? (
-                <button disabled={isSubmitting} type="button" onClick={removeFromWatchlist}>
-                  Прибрати
-                </button>
-              ) : null}
-              {user ? (
-                <div className="custom-list-box">
-                  <strong>Мої списки</strong>
-                  {customLists.length ? (
-                    <>
-                      <select value={selectedCustomListId} onChange={(event) => setSelectedCustomListId(event.target.value)} aria-label="Обрати список">
-                        {customLists.map((list) => (
-                          <option key={list.id} value={list.id}>
-                            {list.name}
-                          </option>
-                        ))}
-                      </select>
-                      <button type="button" onClick={addToCustomList}>
-                        Додати у список
-                      </button>
-                    </>
-                  ) : null}
-                  <div className="custom-list-create">
-                    <input value={newCustomListName} onChange={(event) => setNewCustomListName(event.target.value)} placeholder="Новий список" maxLength={80} />
-                    <button type="button" onClick={createCustomList}>
-                      +
-                    </button>
-                  </div>
-                  {userState?.lists?.length ? (
-                    <div className="custom-list-memberships">
-                      {userState.lists.map((list) => (
-                        <button key={list.id} type="button" onClick={() => removeFromCustomList(list.id)}>
-                          {list.name} ×
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-            </aside>
           </div>
 
           <div className="movie-genre-strip">
@@ -3133,58 +3243,107 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
           </div>
 
           {formatContentType(movie.contentType) === 'Серіал' ? (
-            <section className="series-section">
-              <SectionTitle title="Сезони та епізоди" />
+            <section className="series-section episode-browser">
+              <div className="episode-browser-head">
+                <SectionTitle title="Епізоди" />
+                <span aria-hidden="true">›</span>
+              </div>
               {seasons.length ? (
-                <div className="season-list">
-                  {seasons.map((season) => (
-                    <article className="season-card" key={season.id}>
-                      <div>
-                        <h3>
-                          Сезон {season.seasonNumber}
-                          {season.title ? ` · ${season.title}` : ''}
-                        </h3>
-                        {season.description ? <p>{season.description}</p> : null}
-                        {season.releaseYear ? <small>{season.releaseYear}</small> : null}
-                      </div>
-                      <div className="episode-list">
-                        {season.episodes.length ? (
-                          season.episodes.map((episode) => (
-                            <div className="episode-row" key={episode.id}>
-                              <div>
-                                <strong>
-                                  {episode.episodeNumber}. {episode.title}
-                                </strong>
-                                <span>
-                                  {episode.airDate ? formatDate(episode.airDate) : 'Дата не вказана'}
-                                  {episode.duration ? ` · ${episode.duration} хв` : ''}
-                                  {` · Рейтинг ${formatRating(episode.averageRating)} (${episode.ratingsCount})`}
-                                </span>
+                <div className="episode-browser-body">
+                  <div className="season-tabs" aria-label="Сезони">
+                    <span>Сезон</span>
+                    {seasons.map((season) => (
+                      <button
+                        className={season.id === activeSeason?.id ? 'active' : ''}
+                        key={season.id}
+                        type="button"
+                        onClick={() => {
+                          setActiveSeasonId(season.id);
+                          setSelectedEpisodeId(season.episodes[0]?.id || '');
+                        }}
+                      >
+                        S{season.seasonNumber}
+                      </button>
+                    ))}
+                  </div>
+
+                  {activeSeason ? (
+                    <>
+                      <p className="season-summary">
+                        S{activeSeason.seasonNumber} Епізоди · ★ {formatRating(seasonAverageRating)} середня · з{' '}
+                        {activeSeason.episodes.reduce((sum, episode) => sum + episode.ratingsCount, 0)} оцінок епізодів
+                      </p>
+
+                      {activeSeason.episodes.length ? (
+                        <>
+                          <div
+                            className="episode-rating-chart"
+                            style={{ '--season-average': String(Math.max(0, Math.min(10, seasonAverageRating))) } as React.CSSProperties}
+                            aria-label={`Рейтинги епізодів сезону ${activeSeason.seasonNumber}`}
+                          >
+                            <div className="season-average-line" />
+                            {activeSeason.episodes.map((episode) => {
+                              const rating = Math.max(0, Math.min(10, Number(episode.averageRating)));
+
+                              return (
+                                <button
+                                  className={episode.id === selectedEpisode?.id ? 'active' : ''}
+                                  key={episode.id}
+                                  style={{ '--episode-rating': String(rating) } as React.CSSProperties}
+                                  type="button"
+                                  onClick={() => setSelectedEpisodeId(episode.id)}
+                                  aria-label={`Епізод ${episode.episodeNumber}, рейтинг ${formatRating(episode.averageRating)}`}
+                                >
+                                  <strong>{formatRating(episode.averageRating)}</strong>
+                                  <span>E{episode.episodeNumber}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+
+                          {selectedEpisode ? (
+                            <article className="episode-detail-card">
+                              <div className="episode-still">
+                                {movie.backdropUrl ? <img src={movie.backdropUrl} alt="" loading="lazy" /> : <span>{getInitials(selectedEpisode.title)}</span>}
                               </div>
-                              {user ? (
-                                <div className="episode-rating">
-                                  <input
-                                    aria-label={`Оцінка епізоду ${episode.title}`}
-                                    max="10"
-                                    min="1"
-                                    step="0.5"
-                                    type="number"
-                                    value={episodeRatings[episode.id] ?? '8'}
-                                    onChange={(event) => setEpisodeRatings((current) => ({ ...current, [episode.id]: event.target.value }))}
-                                  />
-                                  <button disabled={isSubmitting} type="button" onClick={() => submitRating({ episodeId: episode.id }, episodeRatings[episode.id] ?? '8')}>
-                                    OK
-                                  </button>
-                                </div>
-                              ) : null}
-                            </div>
-                          ))
-                        ) : (
-                          <p className="muted-text">Епізоди ще не додано.</p>
-                        )}
-                      </div>
-                    </article>
-                  ))}
+                              <div className="episode-detail-copy">
+                                <span>
+                                  S{activeSeason.seasonNumber}.E{selectedEpisode.episodeNumber} ·{' '}
+                                  {selectedEpisode.airDate ? formatDate(selectedEpisode.airDate) : 'Дата не вказана'}
+                                </span>
+                                <h3>{selectedEpisode.title}</h3>
+                                <p>{selectedEpisode.description || 'Опис серії ще не додано.'}</p>
+                                <strong>★ {formatRating(selectedEpisode.averageRating)} ({selectedEpisode.ratingsCount})</strong>
+                                {user ? (
+                                  <div className="episode-star-rating">
+                                    <span>Ваша оцінка:</span>
+                                    <StarRatingInput
+                                      value={Number(episodeRatings[selectedEpisode.id] ?? '8')}
+                                      onChange={(value) => setEpisodeRatings((current) => ({ ...current, [selectedEpisode.id]: String(value) }))}
+                                    />
+                                    <button
+                                      className="episode-rate-submit"
+                                      disabled={isSubmitting}
+                                      type="button"
+                                      onClick={() => submitRating({ episodeId: selectedEpisode.id }, episodeRatings[selectedEpisode.id] ?? '8')}
+                                    >
+                                      Оцінити
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <Link className="button subtle" to="/auth">
+                                    Увійдіть, щоб оцінити серію
+                                  </Link>
+                                )}
+                              </div>
+                            </article>
+                          ) : null}
+                        </>
+                      ) : (
+                        <p className="muted-text">Епізоди ще не додано.</p>
+                      )}
+                    </>
+                  ) : null}
                 </div>
               ) : (
                 <p className="muted-text">Сезони для цього серіалу ще не додано.</p>
@@ -3310,11 +3469,7 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
           <section className="similar-section">
             <SectionTitle title="Схожі фільми" />
             {similar.length ? (
-              <div className="movie-grid compact">
-                {similar.map((item) => (
-                  <MovieCardLink key={item.id} movie={item} />
-                ))}
-              </div>
+              <MovieCarousel items={similar} label="Схожі фільми" />
             ) : (
               <p className="muted-text">Рекомендації з’являться, коли в каталозі буде більше назв зі схожими жанрами.</p>
             )}
@@ -3322,13 +3477,100 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
         </section>
       ) : null}
 
+      {movie && isRatingModalOpen ? (
+        <div className="rating-modal-backdrop" role="presentation" onMouseDown={() => setIsRatingModalOpen(false)}>
+          <div className="rating-modal" role="dialog" aria-modal="true" aria-labelledby="rating-modal-title" onMouseDown={(event) => event.stopPropagation()}>
+            <button className="rating-modal-close" type="button" onClick={() => setIsRatingModalOpen(false)} aria-label="Закрити оцінювання">
+              ×
+            </button>
+            <div className="rating-modal-star" aria-hidden="true">
+              ?
+            </div>
+            <p className="kicker">Оцініть це</p>
+            <h2 id="rating-modal-title">{movie.title}</h2>
+            <StarRatingInput value={Number(ratingDraft)} onChange={(value) => setRatingDraft(String(value))} />
+            <button className="rating-modal-submit" disabled={isSubmitting} type="button" onClick={submitMovieRatingFromModal}>
+              Оцінити
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {movie && isListModalOpen ? (
+        <div className="list-modal-backdrop" role="presentation" onMouseDown={() => setIsListModalOpen(false)}>
+          <div className="list-modal" role="dialog" aria-modal="true" aria-labelledby="list-modal-title" onMouseDown={(event) => event.stopPropagation()}>
+            <header>
+              <div>
+                <p className="kicker">Списки</p>
+                <h2 id="list-modal-title">Додати “{movie.title}”</h2>
+              </div>
+              <button type="button" onClick={() => setIsListModalOpen(false)} aria-label="Закрити списки">
+                ×
+              </button>
+            </header>
+
+            <section className="list-modal-create" aria-label="Створити список">
+              <button type="button" onClick={createModalList} disabled={!newModalListName.trim() || isSubmitting}>
+                + Новий список
+              </button>
+              <input value={newModalListName} onChange={(event) => setNewModalListName(event.target.value)} maxLength={80} placeholder="Назва нового списку" />
+              <div className="segmented-control" aria-label="Видимість списку">
+                <button className={newModalListIsPublic ? 'active' : ''} type="button" onClick={() => setNewModalListIsPublic(true)}>
+                  Публічний
+                </button>
+                <button className={!newModalListIsPublic ? 'active' : ''} type="button" onClick={() => setNewModalListIsPublic(false)}>
+                  Приватний
+                </button>
+              </div>
+            </section>
+
+            <div className="list-modal-options">
+              {customLists.map((list) => (
+                <label className="list-modal-option" key={list.id}>
+                  <input
+                    type="checkbox"
+                    checked={selectedModalListIds.includes(list.id)}
+                    onChange={(event) =>
+                      setSelectedModalListIds((current) =>
+                        event.target.checked ? [...current, list.id] : current.filter((selectedId) => selectedId !== list.id)
+                      )
+                    }
+                  />
+                  <span>
+                    <strong>{list.name}</strong>
+                    <small>
+                      {list.isPublic ? 'Публічний' : 'Приватний'} · {list.itemsCount} назв
+                    </small>
+                  </span>
+                </label>
+              ))}
+              {!customLists.length ? <p className="list-modal-empty">Створіть власний список, щоб додати сюди фільм.</p> : null}
+            </div>
+
+            <footer>
+              <span>{selectedModalLists.length ? `Буде додано у: ${selectedModalLists.map((list) => list.name).join(', ')}` : 'Оберіть власний список'}</span>
+              <button className="primary-action" disabled={isSubmitting || !selectedModalListIds.length} type="button" onClick={saveListModal}>
+                Додати
+              </button>
+            </footer>
+          </div>
+        </div>
+      ) : null}
+
       <SiteFooter />
     </main>
   );
-}function MovieCardLink({ movie }: { movie: MovieCard }) {
+}
+
+function MovieCardLink({ movie }: { movie: MovieCard }) {
+  const rating = formatRating(movie.averageRating);
+
   return (
     <Link className="movie-card" to={`/movies/${movie.id}`}>
       <div className="movie-card-media">
+        <span className="movie-card-watchmark" aria-hidden="true">
+          +
+        </span>
         {movie.posterUrl || movie.backdropUrl ? (
           <img src={movie.posterUrl || movie.backdropUrl || ''} alt="" loading="lazy" />
         ) : (
@@ -3336,20 +3578,14 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
         )}
       </div>
       <div className="movie-card-body">
-        <span>
-          {formatContentType(movie.contentType)} · {movie.releaseYear}
-        </span>
+        <div className="movie-card-rating" aria-label={`Рейтинг ${rating} з 10`}>
+          <span>★ {rating}</span>
+          <span aria-hidden="true">☆</span>
+        </div>
         <h3>{movie.title}</h3>
         <p>
-          Рейтинг {formatRating(movie.averageRating)} · {movie.ratingsCount} оцінок
+          {formatContentType(movie.contentType)} · {movie.releaseYear} · {movie.ratingsCount} оцінок
         </p>
-        {movie.genres.length ? (
-          <div>
-            {movie.genres.slice(0, 3).map((genre) => (
-              <small key={genre.id}>{genre.name}</small>
-            ))}
-          </div>
-        ) : null}
       </div>
     </Link>
   );
@@ -3374,17 +3610,22 @@ function SectionTitle({ title }: { title: string }) {
 
 function StarRatingInput({ value, onChange }: { value: number; onChange: (value: number) => void }) {
   const normalizedValue = Math.max(1, Math.min(10, Math.round(value || 0)));
+  const [hoveredValue, setHoveredValue] = useState<number | null>(null);
+  const displayValue = hoveredValue ?? normalizedValue;
 
   return (
-    <div className="star-rating" aria-label="Оцінка фільму">
+    <div className="star-rating" aria-label="Оцінка фільму" onMouseLeave={() => setHoveredValue(null)}>
       {Array.from({ length: 10 }, (_, index) => {
         const score = index + 1;
 
         return (
           <button
-            className={score <= normalizedValue ? 'active' : ''}
+            className={score <= displayValue ? 'active' : ''}
             key={score}
             type="button"
+            onBlur={() => setHoveredValue(null)}
+            onFocus={() => setHoveredValue(score)}
+            onMouseEnter={() => setHoveredValue(score)}
             onClick={() => onChange(score)}
             aria-label={`${score} з 10`}
           >
@@ -3392,7 +3633,7 @@ function StarRatingInput({ value, onChange }: { value: number; onChange: (value:
           </button>
         );
       })}
-      <strong>{normalizedValue}/10</strong>
+      <strong>{displayValue}/10</strong>
     </div>
   );
 }
@@ -3408,6 +3649,10 @@ function EmptyState({ title, text }: { title: string; text: string }) {
       <p>{text}</p>
     </div>
   );
+}
+
+function AuthGate() {
+  return <EmptyState title="Відновлюємо сесію" text="Зараз повернемо вас в акаунт." />;
 }
 
 function TagList({ title, items }: { title: string; items: string[] }) {
@@ -3478,7 +3723,7 @@ function normalizeWatchlistStatus(value?: WatchlistStatus | null) {
 
 function formatWatchlistStatus(value?: string | null) {
   if (value === 'Watched') return 'Переглянуто';
-  if (value === 'Watchlist') return 'Watchlist';
+  if (value === 'Watchlist') return 'Хочу переглянути';
   return 'Додати';
 }
 
@@ -3495,11 +3740,10 @@ function formatDuration(value: number) {
 
 async function fetchJson<T>(path: string): Promise<T> {
   const response = await fetch(`${apiUrl}${path}`);
-  const text = await response.text();
-  const data = text ? JSON.parse(text) : null;
+  const data = await readResponseBody(response);
 
   if (!response.ok) {
-    throw new Error(toFriendlyMessage(data?.message ?? data?.detail));
+    throw new Error(getApiErrorMessage(data));
   }
 
   return data as T;
@@ -3516,11 +3760,10 @@ async function authedRequest<T>(path: string, accessToken: string, options: Requ
     }
   });
 
-  const text = await response.text();
-  const data = text ? JSON.parse(text) : null;
+  const data = await readResponseBody(response);
 
   if (!response.ok) {
-    throw new Error(toFriendlyMessage(data?.message ?? data?.detail));
+    throw new Error(getApiErrorMessage(data));
   }
 
   return data as T;
@@ -3539,11 +3782,10 @@ async function uploadImage(path: string, accessToken: string, file: File): Promi
     body
   });
 
-  const text = await response.text();
-  const data = text ? JSON.parse(text) : null;
+  const data = await readResponseBody(response);
 
   if (!response.ok) {
-    throw new Error(toFriendlyMessage(data?.message ?? data?.detail));
+    throw new Error(getApiErrorMessage(data));
   }
 
   return data as UploadResponse;
@@ -3559,7 +3801,47 @@ function formatCreditType(value: number | string) {
   return 'Актор';
 }
 
+async function readResponseBody(response: Response): Promise<unknown> {
+  const text = await response.text();
+
+  if (!text.trim()) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    if (!response.ok) {
+      const message = text.trim().startsWith('<') ? 'Сервер повернув сторінку помилки замість JSON.' : text;
+      return { message };
+    }
+
+    throw new Error('Сервер повернув відповідь у неочікуваному форматі.');
+  }
+}
+
+function getApiErrorMessage(data: unknown, fallback = 'Щось пішло не так. Спробуйте ще раз.') {
+  if (data && typeof data === 'object') {
+    const record = data as Record<string, unknown>;
+    const message = record.message ?? record.Message ?? record.detail ?? record.title;
+
+    if (typeof message === 'string') {
+      return toFriendlyMessage(message);
+    }
+  }
+
+  return fallback;
+}
+
 function toFriendlyMessage(message?: string) {
+  if (message?.includes('relation "user_movie_lists" does not exist')) {
+    return 'База даних не оновлена: застосуйте міграції або перезапустіть API.';
+  }
+
+  if (message && (message.includes('Npgsql.') || message.includes('PostgresException') || message.includes(' at Microsoft.'))) {
+    return 'Сервер повернув технічну помилку. Перевірте міграції бази даних і логи API.';
+  }
+
   switch (message) {
     case 'Username must be between 3 and 30 characters.':
       return 'Ім’я має бути від 3 до 30 символів.';

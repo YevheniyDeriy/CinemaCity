@@ -87,12 +87,19 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             entity.ToTable("movies");
             entity.HasKey(movie => movie.Id);
             entity.Property(movie => movie.Id).HasColumnName("id");
+            entity.Property(movie => movie.TmdbId).HasColumnName("tmdb_id");
             entity.Property(movie => movie.Title).HasColumnName("title").HasMaxLength(255).IsRequired();
             entity.Property(movie => movie.OriginalTitle).HasColumnName("original_title").HasMaxLength(255);
             entity.Property(movie => movie.ContentType).HasColumnName("content_type").HasConversion<string>().HasMaxLength(32).IsRequired();
             entity.Property(movie => movie.ReleaseYear).HasColumnName("release_year");
             entity.Property(movie => movie.Duration).HasColumnName("duration");
             entity.Property(movie => movie.Description).HasColumnName("description");
+            entity.Property(movie => movie.Status).HasColumnName("status").HasMaxLength(64);
+            entity.Property(movie => movie.Tagline).HasColumnName("tagline").HasMaxLength(512);
+            entity.Property(movie => movie.FirstAirDate).HasColumnName("first_air_date");
+            entity.Property(movie => movie.LastAirDate).HasColumnName("last_air_date");
+            entity.Property(movie => movie.SeasonsCount).HasColumnName("seasons_count");
+            entity.Property(movie => movie.EpisodesCount).HasColumnName("episodes_count");
             entity.Property(movie => movie.PosterUrl).HasColumnName("poster_url");
             entity.Property(movie => movie.BackdropUrl).HasColumnName("backdrop_url");
             entity.Property(movie => movie.TrailerYoutubeId).HasColumnName("trailer_youtube_id").HasMaxLength(64);
@@ -106,6 +113,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             entity.HasIndex(movie => movie.ReleaseYear);
             entity.HasIndex(movie => new { movie.AverageRating, movie.RatingsCount });
             entity.HasIndex(movie => movie.IsDeleted);
+            entity.HasIndex(movie => new { movie.ContentType, movie.TmdbId }).IsUnique().HasFilter("tmdb_id > 0");
         });
     }
 
@@ -116,10 +124,12 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             entity.ToTable("genres");
             entity.HasKey(genre => genre.Id);
             entity.Property(genre => genre.Id).HasColumnName("id");
+            entity.Property(genre => genre.TmdbId).HasColumnName("tmdb_id");
             entity.Property(genre => genre.Name).HasColumnName("name").HasMaxLength(100).IsRequired();
             entity.Property(genre => genre.Slug).HasColumnName("slug").HasMaxLength(100).IsRequired();
             entity.HasIndex(genre => genre.Name).IsUnique();
             entity.HasIndex(genre => genre.Slug).IsUnique();
+            entity.HasIndex(genre => genre.TmdbId).IsUnique().HasFilter("tmdb_id > 0");
             entity.HasMany(genre => genre.Movies)
                 .WithMany(movie => movie.Genres)
                 .UsingEntity<Dictionary<string, object>>(
@@ -173,6 +183,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             entity.ToTable("persons");
             entity.HasKey(person => person.Id);
             entity.Property(person => person.Id).HasColumnName("id");
+            entity.Property(person => person.TmdbId).HasColumnName("tmdb_id");
             entity.Property(person => person.FullName).HasColumnName("full_name").HasMaxLength(255).IsRequired();
             entity.Property(person => person.BirthDate).HasColumnName("birth_date");
             entity.Property(person => person.BirthPlace).HasColumnName("birth_place").HasMaxLength(255);
@@ -181,6 +192,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             entity.Property(person => person.CreatedAt).HasColumnName("created_at");
             entity.Property(person => person.UpdatedAt).HasColumnName("updated_at");
             entity.HasIndex(person => person.FullName);
+            entity.HasIndex(person => person.TmdbId).IsUnique().HasFilter("tmdb_id > 0");
         });
 
         modelBuilder.Entity<MovieCast>(entity =>
@@ -223,6 +235,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             entity.Property(episode => episode.SeasonId).HasColumnName("season_id");
             entity.Property(episode => episode.EpisodeNumber).HasColumnName("episode_number");
             entity.Property(episode => episode.Title).HasColumnName("title").HasMaxLength(255).IsRequired();
+            entity.Property(episode => episode.Description).HasColumnName("description").HasMaxLength(800);
             entity.Property(episode => episode.AirDate).HasColumnName("air_date");
             entity.Property(episode => episode.Duration).HasColumnName("duration");
             entity.Property(episode => episode.AverageRating).HasColumnName("average_rating").HasPrecision(3, 1);
@@ -338,6 +351,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             entity.Property(list => list.UserId).HasColumnName("user_id");
             entity.Property(list => list.Name).HasColumnName("name").HasMaxLength(80).IsRequired();
             entity.Property(list => list.Description).HasColumnName("description").HasMaxLength(500);
+            entity.Property(list => list.IsPublic).HasColumnName("is_public");
             entity.Property(list => list.CreatedAt).HasColumnName("created_at");
             entity.Property(list => list.UpdatedAt).HasColumnName("updated_at");
             entity.HasIndex(list => new { list.UserId, list.Name }).IsUnique();

@@ -3,6 +3,7 @@ namespace CinemaCity.Domain.Entities;
 public class Person
 {
     public Guid Id { get; set; }
+    public int TmdbId { get; set; }
     public string FullName { get; set; } = string.Empty;
     public DateOnly? BirthDate { get; set; }
     public string? BirthPlace { get; set; }

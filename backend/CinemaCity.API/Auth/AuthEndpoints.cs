@@ -284,7 +284,8 @@ public static class AuthEndpoints
             }
         }
 
-        httpContext.Response.Cookies.Delete(AuthSetup.RefreshTokenCookieName);
+        httpContext.Response.Cookies.Delete(AuthSetup.RefreshTokenCookieName, CreateRefreshTokenCookieOptions(httpContext, null));
+        httpContext.Response.Cookies.Delete(AuthSetup.RefreshTokenCookieName, CreateLegacyRefreshTokenCookieOptions(httpContext));
 
         return Results.Ok(new { Message = "Logged out." });
     }
@@ -420,13 +421,31 @@ public static class AuthEndpoints
         httpContext.Response.Cookies.Append(
             AuthSetup.RefreshTokenCookieName,
             refreshToken,
-            new CookieOptions
-            {
-                HttpOnly = true,
-                Secure = httpContext.Request.IsHttps,
-                SameSite = SameSiteMode.Strict,
-                Expires = expiresAt
-            });
+            CreateRefreshTokenCookieOptions(httpContext, expiresAt));
+    }
+
+    private static CookieOptions CreateRefreshTokenCookieOptions(HttpContext httpContext, DateTimeOffset? expiresAt)
+    {
+        return new CookieOptions
+        {
+            HttpOnly = true,
+            Secure = httpContext.Request.IsHttps,
+            SameSite = SameSiteMode.Strict,
+            Path = "/",
+            IsEssential = true,
+            Expires = expiresAt
+        };
+    }
+
+    private static CookieOptions CreateLegacyRefreshTokenCookieOptions(HttpContext httpContext)
+    {
+        return new CookieOptions
+        {
+            HttpOnly = true,
+            Secure = httpContext.Request.IsHttps,
+            SameSite = SameSiteMode.Strict,
+            Path = "/api/auth"
+        };
     }
 
     private static AuthUserResponse ToUserResponse(User user)

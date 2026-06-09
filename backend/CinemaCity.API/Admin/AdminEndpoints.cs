@@ -55,6 +55,14 @@ public static partial class AdminEndpoints
         admin.MapDelete("/persons/{id:guid}", DeletePersonAsync)
             .WithName("AdminDeletePerson");
 
+        admin.MapPost("/movies/{movieId:guid}/poster", UploadMoviePosterAsync)
+            .DisableAntiforgery()
+            .WithName("AdminUploadMoviePoster");
+
+        admin.MapPost("/persons/{personId:guid}/photo", UploadPersonPhotoAsync)
+            .DisableAntiforgery()
+            .WithName("AdminUploadPersonPhoto");
+
         admin.MapPost("/uploads/poster", (HttpRequest request, IWebHostEnvironment environment, IFormFile file, CancellationToken cancellationToken) =>
                 UploadImageAsync(request, environment, file, "posters", cancellationToken))
             .DisableAntiforgery()
@@ -64,6 +72,8 @@ public static partial class AdminEndpoints
                 UploadImageAsync(request, environment, file, "photos", cancellationToken))
             .DisableAntiforgery()
             .WithName("AdminUploadPhoto");
+
+        MapTmdbImportEndpoints(admin);
 
         return routes;
     }
@@ -262,6 +272,74 @@ public static partial class AdminEndpoints
         return Results.NoContent();
     }
 
+    private static async Task<IResult> UploadMoviePosterAsync(
+        Guid movieId,
+        HttpRequest request,
+        IWebHostEnvironment environment,
+        AppDbContext dbContext,
+        IFormFile file,
+        CancellationToken cancellationToken)
+    {
+        var movie = await dbContext.Movies.FirstOrDefaultAsync(candidate => candidate.Id == movieId, cancellationToken);
+        if (movie is null)
+        {
+            return Results.NotFound(new { Message = "Movie was not found." });
+        }
+
+        var upload = await SaveImageAsync(
+            request,
+            environment,
+            file,
+            "posters",
+            $"movie_poster_{movieId:N}",
+            cancellationToken);
+
+        if (upload.Result is not null)
+        {
+            return upload.Result;
+        }
+
+        movie.PosterUrl = upload.Response!.Path;
+        movie.UpdatedAt = DateTimeOffset.UtcNow;
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        return Results.Ok(upload.Response);
+    }
+
+    private static async Task<IResult> UploadPersonPhotoAsync(
+        Guid personId,
+        HttpRequest request,
+        IWebHostEnvironment environment,
+        AppDbContext dbContext,
+        IFormFile file,
+        CancellationToken cancellationToken)
+    {
+        var person = await dbContext.Persons.FirstOrDefaultAsync(candidate => candidate.Id == personId, cancellationToken);
+        if (person is null)
+        {
+            return Results.NotFound(new { Message = "Person was not found." });
+        }
+
+        var upload = await SaveImageAsync(
+            request,
+            environment,
+            file,
+            "photos",
+            $"person_photo_{personId:N}",
+            cancellationToken);
+
+        if (upload.Result is not null)
+        {
+            return upload.Result;
+        }
+
+        person.PhotoUrl = upload.Response!.Path;
+        person.UpdatedAt = DateTimeOffset.UtcNow;
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        return Results.Ok(upload.Response);
+    }
+
     private static async Task<IResult> UploadImageAsync(
         HttpRequest request,
         IWebHostEnvironment environment,
@@ -269,27 +347,51 @@ public static partial class AdminEndpoints
         string bucket,
         CancellationToken cancellationToken)
     {
+        var upload = await SaveImageAsync(
+            request,
+            environment,
+            file,
+            bucket,
+            $"{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}",
+            cancellationToken);
+
+        return upload.Result ?? Results.Ok(upload.Response);
+    }
+
+    private static async Task<(IResult? Result, UploadResponse? Response)> SaveImageAsync(
+        HttpRequest request,
+        IWebHostEnvironment environment,
+        IFormFile file,
+        string bucket,
+        string fileNameWithoutExtension,
+        CancellationToken cancellationToken)
+    {
         if (file.Length == 0)
         {
-            return Results.BadRequest(new { Message = "File is empty." });
+            return (Results.BadRequest(new { Message = "File is empty." }), null);
         }
 
         if (file.Length > MaxUploadBytes)
         {
-            return Results.BadRequest(new { Message = "File is too large. Maximum size is 5 MB." });
+            return (Results.BadRequest(new { Message = "File is too large. Maximum size is 5 MB." }), null);
         }
 
         if (!AllowedImageContentTypes.Contains(file.ContentType))
         {
-            return Results.BadRequest(new { Message = "Only JPG, PNG, WEBP and GIF images are allowed." });
+            return (Results.BadRequest(new { Message = "Only JPG, PNG, WEBP and GIF images are allowed." }), null);
         }
 
         var uploadRoot = Path.Combine(environment.WebRootPath ?? Path.Combine(environment.ContentRootPath, "wwwroot"), "uploads", bucket);
         Directory.CreateDirectory(uploadRoot);
 
         var extension = ExtensionByContentType[file.ContentType];
-        var fileName = $"{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}{extension}";
+        var fileName = $"{fileNameWithoutExtension}{extension}";
         var filePath = Path.Combine(uploadRoot, fileName);
+
+        foreach (var staleFile in Directory.EnumerateFiles(uploadRoot, $"{fileNameWithoutExtension}.*"))
+        {
+            File.Delete(staleFile);
+        }
 
         await using (var stream = File.Create(filePath))
         {
@@ -299,7 +401,7 @@ public static partial class AdminEndpoints
         var path = $"/uploads/{bucket}/{fileName}";
         var url = $"{request.Scheme}://{request.Host}{path}";
 
-        return Results.Ok(new UploadResponse(path, url));
+        return (null, new UploadResponse(path, url));
     }
 
     private static AdminPersonResponse ToPersonResponse(Person person, int creditsCount)

@@ -175,6 +175,7 @@ public static class ProfileEndpoints
                 list.Id,
                 list.Name,
                 list.Description,
+                list.IsPublic,
                 list.Items.Count,
                 list.CreatedAt,
                 list.UpdatedAt))
@@ -197,6 +198,7 @@ public static class ProfileEndpoints
                 candidate.Id,
                 candidate.Name,
                 candidate.Description,
+                candidate.IsPublic,
                 candidate.CreatedAt,
                 candidate.UpdatedAt,
                 candidate.Items
@@ -254,6 +256,7 @@ public static class ProfileEndpoints
             UserId = userId,
             Name = name,
             Description = TrimOrNull(request.Description),
+            IsPublic = request.IsPublic,
             CreatedAt = DateTimeOffset.UtcNow
         };
 
@@ -264,6 +267,7 @@ public static class ProfileEndpoints
             list.Id,
             list.Name,
             list.Description,
+            list.IsPublic,
             0,
             list.CreatedAt,
             list.UpdatedAt));
@@ -302,6 +306,7 @@ public static class ProfileEndpoints
 
         list.Name = name;
         list.Description = TrimOrNull(request.Description);
+        list.IsPublic = request.IsPublic;
         list.UpdatedAt = DateTimeOffset.UtcNow;
         await dbContext.SaveChangesAsync(cancellationToken);
 
@@ -591,7 +596,7 @@ public sealed record WatchlistItemResponse(
     DateTimeOffset AddedAt,
     DateTimeOffset? UpdatedAt);
 
-public sealed record MovieListUpsertRequest(string Name, string? Description);
+public sealed record MovieListUpsertRequest(string Name, string? Description, bool IsPublic = false);
 
 public sealed record MovieListItemRequest(Guid MovieId);
 
@@ -599,6 +604,7 @@ public sealed record MovieListSummaryResponse(
     Guid Id,
     string Name,
     string? Description,
+    bool IsPublic,
     int ItemsCount,
     DateTimeOffset CreatedAt,
     DateTimeOffset? UpdatedAt);
@@ -607,6 +613,7 @@ public sealed record MovieListDetailsResponse(
     Guid Id,
     string Name,
     string? Description,
+    bool IsPublic,
     DateTimeOffset CreatedAt,
     DateTimeOffset? UpdatedAt,
     IReadOnlyCollection<MovieListItemResponse> Items);

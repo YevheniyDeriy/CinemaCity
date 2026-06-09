@@ -6,6 +6,7 @@ public class Episode
     public Guid SeasonId { get; set; }
     public int EpisodeNumber { get; set; }
     public string Title { get; set; } = string.Empty;
+    public string? Description { get; set; }
     public DateOnly? AirDate { get; set; }
     public int? Duration { get; set; }
     public decimal AverageRating { get; set; }
