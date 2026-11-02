@@ -1,6 +1,6 @@
+using CinemaCity.Application.Persistence;
 using CinemaCity.Domain.Entities;
 using CinemaCity.Domain.Enums;
-using CinemaCity.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
 namespace CinemaCity.API.Movies;
@@ -45,9 +45,9 @@ public static class MovieEndpoints
         return routes;
     }
 
-    private static async Task<IResult> GetGenresAsync(AppDbContext dbContext, CancellationToken cancellationToken)
+    private static async Task<IResult> GetGenresAsync(IRepository<Genre> genreRepository, CancellationToken cancellationToken)
     {
-        var genres = await dbContext.Genres
+        var genres = await genreRepository.Query()
             .AsNoTracking()
             .OrderBy(genre => genre.Name)
             .Select(genre => new GenreResponse(genre.Id, genre.Name, genre.Slug))
@@ -57,7 +57,7 @@ public static class MovieEndpoints
     }
 
     private static async Task<IResult> GetMoviesAsync(
-        AppDbContext dbContext,
+        IRepository<Movie> movieRepository,
         string? q,
         string? genre,
         int? yearFrom,
@@ -69,7 +69,7 @@ public static class MovieEndpoints
         int pageSize = 20,
         CancellationToken cancellationToken = default)
     {
-        var query = BuildMovieQuery(dbContext, q, genre, yearFrom, yearTo, ratingMin, contentType);
+        var query = BuildMovieQuery(movieRepository, q, genre, yearFrom, yearTo, ratingMin, contentType);
         var normalizedPage = Math.Max(page, 1);
         var normalizedPageSize = Math.Clamp(pageSize, 1, MaxPageSize);
         var total = await query.CountAsync(cancellationToken);
@@ -83,18 +83,18 @@ public static class MovieEndpoints
     }
 
     private static Task<IResult> SearchMoviesAsync(
-        AppDbContext dbContext,
+        IRepository<Movie> movieRepository,
         string? q,
         int page = 1,
         int pageSize = 20,
         CancellationToken cancellationToken = default)
     {
-        return GetMoviesAsync(dbContext, q, null, null, null, null, null, "rating", page, pageSize, cancellationToken);
+        return GetMoviesAsync(movieRepository, q, null, null, null, null, null, "rating", page, pageSize, cancellationToken);
     }
 
-    private static async Task<IResult> GetMovieAsync(Guid id, AppDbContext dbContext, CancellationToken cancellationToken)
+    private static async Task<IResult> GetMovieAsync(Guid id, IRepository<Movie> movieRepository, CancellationToken cancellationToken)
     {
-        var movie = await dbContext.Movies
+        var movie = await movieRepository.Query()
             .AsNoTracking()
             .Include(candidate => candidate.Genres)
             .Include(candidate => candidate.Countries)
@@ -113,11 +113,11 @@ public static class MovieEndpoints
 
     private static async Task<IResult> GetSimilarMoviesAsync(
         Guid id,
-        AppDbContext dbContext,
+        IRepository<Movie> movieRepository,
         int limit = 8,
         CancellationToken cancellationToken = default)
     {
-        var genreIds = await dbContext.Movies
+        var genreIds = await movieRepository.Query()
             .AsNoTracking()
             .Where(movie => movie.Id == id && !movie.IsDeleted)
             .SelectMany(movie => movie.Genres.Select(genre => genre.Id))
@@ -129,7 +129,7 @@ public static class MovieEndpoints
         }
 
         var normalizedLimit = Math.Clamp(limit, 1, 20);
-        var movies = await dbContext.Movies
+        var movies = await movieRepository.Query()
             .AsNoTracking()
             .Where(movie => movie.Id != id && !movie.IsDeleted)
             .Where(movie => movie.Genres.Any(genre => genreIds.Contains(genre.Id)))
@@ -145,13 +145,23 @@ public static class MovieEndpoints
 
     private static async Task<IResult> CreateMovieAsync(
         MovieUpsertRequest request,
-        AppDbContext dbContext,
+        IRepository<Movie> movieRepository,
+        IRepository<Genre> genreRepository,
+        IRepository<Country> countryRepository,
+        IRepository<Language> languageRepository,
+        IRepository<Person> personRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
         var validation = ValidateMovieRequest(request);
         if (validation is not null)
         {
             return Results.BadRequest(new { Message = validation });
+        }
+
+        if (await MovieDuplicateExistsAsync(movieRepository, request, excludedMovieId: null, cancellationToken))
+        {
+            return Results.Conflict(new { Message = "Movie or series already exists in the catalog." });
         }
 
         var movie = new Movie
@@ -169,9 +179,9 @@ public static class MovieEndpoints
             CreatedAt = DateTimeOffset.UtcNow
         };
 
-        await ApplyMovieRelationsAsync(movie, request, dbContext, cancellationToken);
-        dbContext.Movies.Add(movie);
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await ApplyMovieRelationsAsync(movie, request, genreRepository, countryRepository, languageRepository, personRepository, cancellationToken);
+        movieRepository.Add(movie);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Results.Created($"/api/movies/{movie.Id}", new { movie.Id });
     }
@@ -179,7 +189,13 @@ public static class MovieEndpoints
     private static async Task<IResult> UpdateMovieAsync(
         Guid id,
         MovieUpsertRequest request,
-        AppDbContext dbContext,
+        IRepository<Movie> movieRepository,
+        IRepository<MovieCast> movieCastRepository,
+        IRepository<Genre> genreRepository,
+        IRepository<Country> countryRepository,
+        IRepository<Language> languageRepository,
+        IRepository<Person> personRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
         var validation = ValidateMovieRequest(request);
@@ -188,7 +204,7 @@ public static class MovieEndpoints
             return Results.BadRequest(new { Message = validation });
         }
 
-        var movie = await dbContext.Movies
+        var movie = await movieRepository.Query()
             .Include(candidate => candidate.Genres)
             .Include(candidate => candidate.Countries)
             .Include(candidate => candidate.Languages)
@@ -198,6 +214,11 @@ public static class MovieEndpoints
         if (movie is null)
         {
             return Results.NotFound(new { Message = "Movie was not found." });
+        }
+
+        if (await MovieDuplicateExistsAsync(movieRepository, request, id, cancellationToken))
+        {
+            return Results.Conflict(new { Message = "Movie or series already exists in the catalog." });
         }
 
         movie.Title = request.Title.Trim();
@@ -211,20 +232,43 @@ public static class MovieEndpoints
         movie.TrailerYoutubeId = TrimOrNull(request.TrailerYoutubeId);
         movie.UpdatedAt = DateTimeOffset.UtcNow;
 
-        dbContext.MovieCast.RemoveRange(movie.Cast);
+        movieCastRepository.RemoveRange(movie.Cast);
         movie.Genres.Clear();
         movie.Countries.Clear();
         movie.Languages.Clear();
 
-        await ApplyMovieRelationsAsync(movie, request, dbContext, cancellationToken);
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await ApplyMovieRelationsAsync(movie, request, genreRepository, countryRepository, languageRepository, personRepository, cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Results.NoContent();
     }
 
-    private static async Task<IResult> DeleteMovieAsync(Guid id, AppDbContext dbContext, CancellationToken cancellationToken)
+    private static async Task<bool> MovieDuplicateExistsAsync(
+        IRepository<Movie> movieRepository,
+        MovieUpsertRequest request,
+        Guid? excludedMovieId,
+        CancellationToken cancellationToken)
     {
-        var movie = await dbContext.Movies.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+        var title = request.Title.Trim().ToLower();
+        var originalTitle = TrimOrNull(request.OriginalTitle)?.ToLower();
+
+        return await movieRepository.Query().AnyAsync(movie =>
+            !movie.IsDeleted
+            && movie.ContentType == request.ContentType
+            && movie.ReleaseYear == request.ReleaseYear
+            && (excludedMovieId == null || movie.Id != excludedMovieId)
+            && (movie.Title.ToLower() == title
+                || (originalTitle != null && movie.OriginalTitle != null && movie.OriginalTitle.ToLower() == originalTitle)),
+            cancellationToken);
+    }
+
+    private static async Task<IResult> DeleteMovieAsync(
+        Guid id,
+        IRepository<Movie> movieRepository,
+        IUnitOfWork unitOfWork,
+        CancellationToken cancellationToken)
+    {
+        var movie = await movieRepository.Query().FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
 
         if (movie is null)
         {
@@ -234,14 +278,18 @@ public static class MovieEndpoints
         movie.IsDeleted = true;
         movie.DeletedAt = DateTimeOffset.UtcNow;
         movie.UpdatedAt = DateTimeOffset.UtcNow;
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Results.NoContent();
     }
 
-    private static async Task<IResult> RestoreMovieAsync(Guid id, AppDbContext dbContext, CancellationToken cancellationToken)
+    private static async Task<IResult> RestoreMovieAsync(
+        Guid id,
+        IRepository<Movie> movieRepository,
+        IUnitOfWork unitOfWork,
+        CancellationToken cancellationToken)
     {
-        var movie = await dbContext.Movies.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+        var movie = await movieRepository.Query().FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
 
         if (movie is null)
         {
@@ -251,13 +299,13 @@ public static class MovieEndpoints
         movie.IsDeleted = false;
         movie.DeletedAt = null;
         movie.UpdatedAt = DateTimeOffset.UtcNow;
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Results.NoContent();
     }
 
     private static IQueryable<Movie> BuildMovieQuery(
-        AppDbContext dbContext,
+        IRepository<Movie> movieRepository,
         string? q,
         string? genre,
         int? yearFrom,
@@ -265,7 +313,7 @@ public static class MovieEndpoints
         decimal? ratingMin,
         string? contentType)
     {
-        var query = dbContext.Movies
+        var query = movieRepository.Query()
             .AsNoTracking()
             .Where(movie => !movie.IsDeleted);
 
@@ -325,7 +373,10 @@ public static class MovieEndpoints
     private static async Task ApplyMovieRelationsAsync(
         Movie movie,
         MovieUpsertRequest request,
-        AppDbContext dbContext,
+        IRepository<Genre> genreRepository,
+        IRepository<Country> countryRepository,
+        IRepository<Language> languageRepository,
+        IRepository<Person> personRepository,
         CancellationToken cancellationToken)
     {
         var genreIds = request.GenreIds.Distinct().ToArray();
@@ -333,19 +384,19 @@ public static class MovieEndpoints
         var languageIds = request.LanguageIds.Distinct().ToArray();
         var personIds = request.Cast.Select(cast => cast.PersonId).Distinct().ToArray();
 
-        movie.Genres = await dbContext.Genres
+        movie.Genres = await genreRepository.Query()
             .Where(genre => genreIds.Contains(genre.Id))
             .ToListAsync(cancellationToken);
 
-        movie.Countries = await dbContext.Countries
+        movie.Countries = await countryRepository.Query()
             .Where(country => countryIds.Contains(country.Id))
             .ToListAsync(cancellationToken);
 
-        movie.Languages = await dbContext.Languages
+        movie.Languages = await languageRepository.Query()
             .Where(language => languageIds.Contains(language.Id))
             .ToListAsync(cancellationToken);
 
-        var existingPersonIds = await dbContext.Persons
+        var existingPersonIds = await personRepository.Query()
             .Where(person => personIds.Contains(person.Id))
             .Select(person => person.Id)
             .ToListAsync(cancellationToken);
@@ -379,6 +430,11 @@ public static class MovieEndpoints
         if (request.Duration is not null and <= 0)
         {
             return "Duration must be greater than zero.";
+        }
+
+        if (request.Cast.Any(cast => cast.SortOrder < 0))
+        {
+            return "Cast sort order cannot be negative.";
         }
 
         return null;
@@ -438,6 +494,7 @@ public static class MovieEndpoints
     {
         return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     }
+
 }
 
 public sealed record PagedResult<T>(IReadOnlyCollection<T> Items, int Page, int PageSize, int Total);

@@ -1,0 +1,7 @@
+{
+  "source": "unchanged working-tree monolith",
+  "method": "POST",
+  "path": "/api/ratings",
+  "status": 400,
+  "body": "{\u0022message\u0022:\u0022Score must be between 1 and 10.\u0022}"
+}

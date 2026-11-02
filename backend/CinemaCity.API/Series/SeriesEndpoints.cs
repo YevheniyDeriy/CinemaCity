@@ -1,6 +1,7 @@
+using System.Security.Claims;
+using CinemaCity.Application.Persistence;
 using CinemaCity.Domain.Entities;
 using CinemaCity.Domain.Enums;
-using CinemaCity.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
 namespace CinemaCity.API.Series;
@@ -38,9 +39,17 @@ public static class SeriesEndpoints
         return routes;
     }
 
-    private static async Task<IResult> GetSeasonsAsync(Guid movieId, AppDbContext dbContext, CancellationToken cancellationToken)
+    private static async Task<IResult> GetSeasonsAsync(
+        Guid movieId,
+        ClaimsPrincipal principal,
+        IRepository<Movie> movieRepository,
+        IRepository<Season> seasonRepository,
+        IRepository<Rating> ratingRepository,
+        IRepository<WatchlistItem> watchlistRepository,
+        IUnitOfWork unitOfWork,
+        CancellationToken cancellationToken)
     {
-        var seriesExists = await dbContext.Movies
+        var seriesExists = await movieRepository.Query()
             .AsNoTracking()
             .AnyAsync(movie => movie.Id == movieId && !movie.IsDeleted && movie.ContentType == ContentType.Series, cancellationToken);
 
@@ -49,7 +58,13 @@ public static class SeriesEndpoints
             return Results.NotFound(new { Message = "Series was not found." });
         }
 
-        var seasons = await dbContext.Seasons
+        var currentUserId = TryGetUserId(principal);
+        if (currentUserId is Guid userId)
+        {
+            await EnsureRatedSeriesIsWatchedAsync(movieId, userId, ratingRepository, watchlistRepository, unitOfWork, cancellationToken);
+        }
+
+        var seasons = await seasonRepository.Query()
             .AsNoTracking()
             .Where(season => season.SeriesId == movieId)
             .OrderBy(season => season.SeasonNumber)
@@ -71,20 +86,74 @@ public static class SeriesEndpoints
                         episode.AirDate,
                         episode.Duration,
                         episode.AverageRating,
-                        episode.RatingsCount))
+                        episode.RatingsCount,
+                        currentUserId == null
+                            ? null
+                            : episode.Ratings
+                                .Where(rating => rating.UserId == currentUserId.Value)
+                                .Select(rating => new EpisodeUserRatingResponse(rating.Id, rating.Score))
+                                .FirstOrDefault()))
                     .ToArray()))
             .ToListAsync(cancellationToken);
 
         return Results.Ok(seasons);
     }
 
+    private static async Task EnsureRatedSeriesIsWatchedAsync(
+        Guid seriesId,
+        Guid userId,
+        IRepository<Rating> ratingRepository,
+        IRepository<WatchlistItem> watchlistRepository,
+        IUnitOfWork unitOfWork,
+        CancellationToken cancellationToken)
+    {
+        var hasEpisodeRating = await ratingRepository.Query()
+            .AsNoTracking()
+            .AnyAsync(rating =>
+                rating.UserId == userId
+                && rating.EpisodeId != null
+                && rating.Episode!.Season.SeriesId == seriesId,
+                cancellationToken);
+
+        if (!hasEpisodeRating)
+        {
+            return;
+        }
+
+        var watchlistItem = await watchlistRepository.Query()
+            .FirstOrDefaultAsync(item => item.UserId == userId && item.MovieId == seriesId, cancellationToken);
+
+        if (watchlistItem is null)
+        {
+            watchlistRepository.Add(new WatchlistItem
+            {
+                Id = Guid.NewGuid(),
+                UserId = userId,
+                MovieId = seriesId,
+                Status = WatchlistStatus.Watched,
+                AddedAt = DateTimeOffset.UtcNow
+            });
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+            return;
+        }
+
+        if (watchlistItem.Status != WatchlistStatus.Watched)
+        {
+            watchlistItem.Status = WatchlistStatus.Watched;
+            watchlistItem.UpdatedAt = DateTimeOffset.UtcNow;
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+    }
+
     private static async Task<IResult> CreateSeasonAsync(
         Guid movieId,
         SeasonUpsertRequest request,
-        AppDbContext dbContext,
+        IRepository<Movie> movieRepository,
+        IRepository<Season> seasonRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
-        var series = await dbContext.Movies
+        var series = await movieRepository.Query()
             .FirstOrDefaultAsync(movie => movie.Id == movieId && !movie.IsDeleted && movie.ContentType == ContentType.Series, cancellationToken);
 
         if (series is null)
@@ -98,7 +167,7 @@ public static class SeriesEndpoints
             return Results.BadRequest(new { Message = validation });
         }
 
-        var duplicate = await dbContext.Seasons
+        var duplicate = await seasonRepository.Query()
             .AnyAsync(season => season.SeriesId == movieId && season.SeasonNumber == request.SeasonNumber, cancellationToken);
 
         if (duplicate)
@@ -116,8 +185,8 @@ public static class SeriesEndpoints
             ReleaseYear = request.ReleaseYear
         };
 
-        dbContext.Seasons.Add(season);
-        await dbContext.SaveChangesAsync(cancellationToken);
+        seasonRepository.Add(season);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Results.Created($"/api/movies/{movieId}/seasons", ToSeasonResponse(season));
     }
@@ -125,7 +194,8 @@ public static class SeriesEndpoints
     private static async Task<IResult> UpdateSeasonAsync(
         Guid seasonId,
         SeasonUpsertRequest request,
-        AppDbContext dbContext,
+        IRepository<Season> seasonRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
         var validation = ValidateSeason(request);
@@ -134,14 +204,14 @@ public static class SeriesEndpoints
             return Results.BadRequest(new { Message = validation });
         }
 
-        var season = await dbContext.Seasons.FirstOrDefaultAsync(candidate => candidate.Id == seasonId, cancellationToken);
+        var season = await seasonRepository.Query().FirstOrDefaultAsync(candidate => candidate.Id == seasonId, cancellationToken);
 
         if (season is null)
         {
             return Results.NotFound(new { Message = "Season was not found." });
         }
 
-        var duplicate = await dbContext.Seasons
+        var duplicate = await seasonRepository.Query()
             .AnyAsync(candidate =>
                 candidate.Id != seasonId
                 && candidate.SeriesId == season.SeriesId
@@ -158,22 +228,26 @@ public static class SeriesEndpoints
         season.Description = TrimOrNull(request.Description);
         season.ReleaseYear = request.ReleaseYear;
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Results.Ok(ToSeasonResponse(season));
     }
 
-    private static async Task<IResult> DeleteSeasonAsync(Guid seasonId, AppDbContext dbContext, CancellationToken cancellationToken)
+    private static async Task<IResult> DeleteSeasonAsync(
+        Guid seasonId,
+        IRepository<Season> seasonRepository,
+        IUnitOfWork unitOfWork,
+        CancellationToken cancellationToken)
     {
-        var season = await dbContext.Seasons.FirstOrDefaultAsync(candidate => candidate.Id == seasonId, cancellationToken);
+        var season = await seasonRepository.Query().FirstOrDefaultAsync(candidate => candidate.Id == seasonId, cancellationToken);
 
         if (season is null)
         {
             return Results.NotFound(new { Message = "Season was not found." });
         }
 
-        dbContext.Seasons.Remove(season);
-        await dbContext.SaveChangesAsync(cancellationToken);
+        seasonRepository.Remove(season);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Results.NoContent();
     }
@@ -181,10 +255,12 @@ public static class SeriesEndpoints
     private static async Task<IResult> CreateEpisodeAsync(
         Guid seasonId,
         EpisodeUpsertRequest request,
-        AppDbContext dbContext,
+        IRepository<Season> seasonRepository,
+        IRepository<Episode> episodeRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
-        var seasonExists = await dbContext.Seasons.AnyAsync(season => season.Id == seasonId, cancellationToken);
+        var seasonExists = await seasonRepository.Query().AnyAsync(season => season.Id == seasonId, cancellationToken);
 
         if (!seasonExists)
         {
@@ -197,7 +273,7 @@ public static class SeriesEndpoints
             return Results.BadRequest(new { Message = validation });
         }
 
-        var duplicate = await dbContext.Episodes
+        var duplicate = await episodeRepository.Query()
             .AnyAsync(episode => episode.SeasonId == seasonId && episode.EpisodeNumber == request.EpisodeNumber, cancellationToken);
 
         if (duplicate)
@@ -216,8 +292,8 @@ public static class SeriesEndpoints
             Duration = request.Duration
         };
 
-        dbContext.Episodes.Add(episode);
-        await dbContext.SaveChangesAsync(cancellationToken);
+        episodeRepository.Add(episode);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Results.Created($"/api/admin/episodes/{episode.Id}", ToEpisodeResponse(episode));
     }
@@ -225,7 +301,8 @@ public static class SeriesEndpoints
     private static async Task<IResult> UpdateEpisodeAsync(
         Guid episodeId,
         EpisodeUpsertRequest request,
-        AppDbContext dbContext,
+        IRepository<Episode> episodeRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
         var validation = ValidateEpisode(request);
@@ -234,14 +311,14 @@ public static class SeriesEndpoints
             return Results.BadRequest(new { Message = validation });
         }
 
-        var episode = await dbContext.Episodes.FirstOrDefaultAsync(candidate => candidate.Id == episodeId, cancellationToken);
+        var episode = await episodeRepository.Query().FirstOrDefaultAsync(candidate => candidate.Id == episodeId, cancellationToken);
 
         if (episode is null)
         {
             return Results.NotFound(new { Message = "Episode was not found." });
         }
 
-        var duplicate = await dbContext.Episodes
+        var duplicate = await episodeRepository.Query()
             .AnyAsync(candidate =>
                 candidate.Id != episodeId
                 && candidate.SeasonId == episode.SeasonId
@@ -259,22 +336,26 @@ public static class SeriesEndpoints
         episode.AirDate = request.AirDate;
         episode.Duration = request.Duration;
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Results.Ok(ToEpisodeResponse(episode));
     }
 
-    private static async Task<IResult> DeleteEpisodeAsync(Guid episodeId, AppDbContext dbContext, CancellationToken cancellationToken)
+    private static async Task<IResult> DeleteEpisodeAsync(
+        Guid episodeId,
+        IRepository<Episode> episodeRepository,
+        IUnitOfWork unitOfWork,
+        CancellationToken cancellationToken)
     {
-        var episode = await dbContext.Episodes.FirstOrDefaultAsync(candidate => candidate.Id == episodeId, cancellationToken);
+        var episode = await episodeRepository.Query().FirstOrDefaultAsync(candidate => candidate.Id == episodeId, cancellationToken);
 
         if (episode is null)
         {
             return Results.NotFound(new { Message = "Episode was not found." });
         }
 
-        dbContext.Episodes.Remove(episode);
-        await dbContext.SaveChangesAsync(cancellationToken);
+        episodeRepository.Remove(episode);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Results.NoContent();
     }
@@ -311,9 +392,10 @@ public static class SeriesEndpoints
             return "Duration must be greater than zero.";
         }
 
-        if (!string.IsNullOrWhiteSpace(request.Description) && request.Description.Length > 800)
+        var descriptionValidation = ValidateEpisodeDescription(request.Description);
+        if (descriptionValidation is not null)
         {
-            return "Episode description must be at most 800 characters.";
+            return descriptionValidation;
         }
 
         return null;
@@ -342,12 +424,26 @@ public static class SeriesEndpoints
             episode.AirDate,
             episode.Duration,
             episode.AverageRating,
-            episode.RatingsCount);
+            episode.RatingsCount,
+            null);
     }
 
     private static string? TrimOrNull(string? value)
     {
         return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+
+    private static string? ValidateEpisodeDescription(string? description)
+    {
+        return !string.IsNullOrWhiteSpace(description) && description.Length > 800
+            ? "Episode description must be at most 800 characters."
+            : null;
+    }
+
+    private static Guid? TryGetUserId(ClaimsPrincipal principal)
+    {
+        var value = principal.FindFirstValue(ClaimTypes.NameIdentifier);
+        return Guid.TryParse(value, out var userId) ? userId : null;
     }
 }
 
@@ -369,7 +465,10 @@ public sealed record EpisodeResponse(
     DateOnly? AirDate,
     int? Duration,
     decimal AverageRating,
-    int RatingsCount);
+    int RatingsCount,
+    EpisodeUserRatingResponse? UserRating);
+
+public sealed record EpisodeUserRatingResponse(Guid Id, decimal Score);
 
 public sealed record SeasonUpsertRequest(
     int SeasonNumber,

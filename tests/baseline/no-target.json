@@ -1,0 +1,7 @@
+{
+  "source": "unchanged working-tree monolith",
+  "method": "POST",
+  "path": "/api/ratings",
+  "status": 400,
+  "body": "{\u0022message\u0022:\u0022Rating must target either a movie or an episode.\u0022}"
+}

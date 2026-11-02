@@ -1,7 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using CinemaCity.Application.Persistence;
 using CinemaCity.Domain.Entities;
-using CinemaCity.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
 namespace CinemaCity.API.Admin;
@@ -63,13 +63,13 @@ public static partial class AdminEndpoints
             .DisableAntiforgery()
             .WithName("AdminUploadPersonPhoto");
 
-        admin.MapPost("/uploads/poster", (HttpRequest request, IWebHostEnvironment environment, IFormFile file, CancellationToken cancellationToken) =>
-                UploadImageAsync(request, environment, file, "posters", cancellationToken))
+        admin.MapPost("/uploads/poster", (HttpRequest request, IWebHostEnvironment environment, CancellationToken cancellationToken) =>
+                UploadImageAsync(request, environment, "posters", cancellationToken))
             .DisableAntiforgery()
             .WithName("AdminUploadPoster");
 
-        admin.MapPost("/uploads/photo", (HttpRequest request, IWebHostEnvironment environment, IFormFile file, CancellationToken cancellationToken) =>
-                UploadImageAsync(request, environment, file, "photos", cancellationToken))
+        admin.MapPost("/uploads/photo", (HttpRequest request, IWebHostEnvironment environment, CancellationToken cancellationToken) =>
+                UploadImageAsync(request, environment, "photos", cancellationToken))
             .DisableAntiforgery()
             .WithName("AdminUploadPhoto");
 
@@ -78,9 +78,9 @@ public static partial class AdminEndpoints
         return routes;
     }
 
-    private static async Task<IResult> GetGenresAsync(AppDbContext dbContext, CancellationToken cancellationToken)
+    private static async Task<IResult> GetGenresAsync(IRepository<Genre> genreRepository, CancellationToken cancellationToken)
     {
-        var genres = await dbContext.Genres
+        var genres = await genreRepository.Query()
             .AsNoTracking()
             .OrderBy(genre => genre.Name)
             .Select(genre => new AdminGenreResponse(
@@ -95,7 +95,8 @@ public static partial class AdminEndpoints
 
     private static async Task<IResult> CreateGenreAsync(
         GenreUpsertRequest request,
-        AppDbContext dbContext,
+        IRepository<Genre> genreRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
         var validation = ValidateGenreRequest(request);
@@ -105,7 +106,7 @@ public static partial class AdminEndpoints
         }
 
         var slug = await EnsureUniqueSlugAsync(
-            dbContext,
+            genreRepository,
             NormalizeSlug(request.Slug, request.Name),
             excludedGenreId: null,
             cancellationToken);
@@ -116,8 +117,8 @@ public static partial class AdminEndpoints
             Slug = slug
         };
 
-        dbContext.Genres.Add(genre);
-        await dbContext.SaveChangesAsync(cancellationToken);
+        genreRepository.Add(genre);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Results.Created($"/api/admin/genres/{genre.Id}", new AdminGenreResponse(genre.Id, genre.Name, genre.Slug, 0));
     }
@@ -125,7 +126,8 @@ public static partial class AdminEndpoints
     private static async Task<IResult> UpdateGenreAsync(
         int id,
         GenreUpsertRequest request,
-        AppDbContext dbContext,
+        IRepository<Genre> genreRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
         var validation = ValidateGenreRequest(request);
@@ -134,7 +136,7 @@ public static partial class AdminEndpoints
             return Results.BadRequest(new { Message = validation });
         }
 
-        var genre = await dbContext.Genres.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+        var genre = await genreRepository.Query().FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
         if (genre is null)
         {
             return Results.NotFound(new { Message = "Genre was not found." });
@@ -142,19 +144,23 @@ public static partial class AdminEndpoints
 
         genre.Name = request.Name.Trim();
         genre.Slug = await EnsureUniqueSlugAsync(
-            dbContext,
+            genreRepository,
             NormalizeSlug(request.Slug, request.Name),
             genre.Id,
             cancellationToken);
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Results.NoContent();
     }
 
-    private static async Task<IResult> DeleteGenreAsync(int id, AppDbContext dbContext, CancellationToken cancellationToken)
+    private static async Task<IResult> DeleteGenreAsync(
+        int id,
+        IRepository<Genre> genreRepository,
+        IUnitOfWork unitOfWork,
+        CancellationToken cancellationToken)
     {
-        var genre = await dbContext.Genres
+        var genre = await genreRepository.Query()
             .Include(candidate => candidate.Movies)
             .FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
 
@@ -163,18 +169,18 @@ public static partial class AdminEndpoints
             return Results.NotFound(new { Message = "Genre was not found." });
         }
 
-        dbContext.Genres.Remove(genre);
-        await dbContext.SaveChangesAsync(cancellationToken);
+        genreRepository.Remove(genre);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Results.NoContent();
     }
 
     private static async Task<IResult> GetPersonsAsync(
-        AppDbContext dbContext,
+        IRepository<Person> personRepository,
         string? q,
         CancellationToken cancellationToken)
     {
-        var query = dbContext.Persons.AsNoTracking();
+        var query = personRepository.Query().AsNoTracking();
 
         if (!string.IsNullOrWhiteSpace(q))
         {
@@ -202,7 +208,8 @@ public static partial class AdminEndpoints
 
     private static async Task<IResult> CreatePersonAsync(
         PersonUpsertRequest request,
-        AppDbContext dbContext,
+        IRepository<Person> personRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
         var validation = ValidatePersonRequest(request);
@@ -222,8 +229,8 @@ public static partial class AdminEndpoints
             CreatedAt = DateTimeOffset.UtcNow
         };
 
-        dbContext.Persons.Add(person);
-        await dbContext.SaveChangesAsync(cancellationToken);
+        personRepository.Add(person);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Results.Created($"/api/admin/persons/{person.Id}", ToPersonResponse(person, 0));
     }
@@ -231,7 +238,8 @@ public static partial class AdminEndpoints
     private static async Task<IResult> UpdatePersonAsync(
         Guid id,
         PersonUpsertRequest request,
-        AppDbContext dbContext,
+        IRepository<Person> personRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
         var validation = ValidatePersonRequest(request);
@@ -240,7 +248,7 @@ public static partial class AdminEndpoints
             return Results.BadRequest(new { Message = validation });
         }
 
-        var person = await dbContext.Persons.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+        var person = await personRepository.Query().FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
         if (person is null)
         {
             return Results.NotFound(new { Message = "Person was not found." });
@@ -253,21 +261,25 @@ public static partial class AdminEndpoints
         person.PhotoUrl = TrimOrNull(request.PhotoUrl);
         person.UpdatedAt = DateTimeOffset.UtcNow;
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Results.NoContent();
     }
 
-    private static async Task<IResult> DeletePersonAsync(Guid id, AppDbContext dbContext, CancellationToken cancellationToken)
+    private static async Task<IResult> DeletePersonAsync(
+        Guid id,
+        IRepository<Person> personRepository,
+        IUnitOfWork unitOfWork,
+        CancellationToken cancellationToken)
     {
-        var person = await dbContext.Persons.FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+        var person = await personRepository.Query().FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
         if (person is null)
         {
             return Results.NotFound(new { Message = "Person was not found." });
         }
 
-        dbContext.Persons.Remove(person);
-        await dbContext.SaveChangesAsync(cancellationToken);
+        personRepository.Remove(person);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Results.NoContent();
     }
@@ -276,20 +288,26 @@ public static partial class AdminEndpoints
         Guid movieId,
         HttpRequest request,
         IWebHostEnvironment environment,
-        AppDbContext dbContext,
-        IFormFile file,
+        IRepository<Movie> movieRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
-        var movie = await dbContext.Movies.FirstOrDefaultAsync(candidate => candidate.Id == movieId, cancellationToken);
+        var movie = await movieRepository.Query().FirstOrDefaultAsync(candidate => candidate.Id == movieId, cancellationToken);
         if (movie is null)
         {
             return Results.NotFound(new { Message = "Movie was not found." });
         }
 
+        var fileRead = await ReadUploadFileAsync(request, cancellationToken);
+        if (fileRead.Result is not null)
+        {
+            return fileRead.Result;
+        }
+
         var upload = await SaveImageAsync(
             request,
             environment,
-            file,
+            fileRead.File!,
             "posters",
             $"movie_poster_{movieId:N}",
             cancellationToken);
@@ -301,7 +319,7 @@ public static partial class AdminEndpoints
 
         movie.PosterUrl = upload.Response!.Path;
         movie.UpdatedAt = DateTimeOffset.UtcNow;
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Results.Ok(upload.Response);
     }
@@ -310,20 +328,26 @@ public static partial class AdminEndpoints
         Guid personId,
         HttpRequest request,
         IWebHostEnvironment environment,
-        AppDbContext dbContext,
-        IFormFile file,
+        IRepository<Person> personRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
-        var person = await dbContext.Persons.FirstOrDefaultAsync(candidate => candidate.Id == personId, cancellationToken);
+        var person = await personRepository.Query().FirstOrDefaultAsync(candidate => candidate.Id == personId, cancellationToken);
         if (person is null)
         {
             return Results.NotFound(new { Message = "Person was not found." });
         }
 
+        var fileRead = await ReadUploadFileAsync(request, cancellationToken);
+        if (fileRead.Result is not null)
+        {
+            return fileRead.Result;
+        }
+
         var upload = await SaveImageAsync(
             request,
             environment,
-            file,
+            fileRead.File!,
             "photos",
             $"person_photo_{personId:N}",
             cancellationToken);
@@ -335,7 +359,7 @@ public static partial class AdminEndpoints
 
         person.PhotoUrl = upload.Response!.Path;
         person.UpdatedAt = DateTimeOffset.UtcNow;
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Results.Ok(upload.Response);
     }
@@ -343,19 +367,44 @@ public static partial class AdminEndpoints
     private static async Task<IResult> UploadImageAsync(
         HttpRequest request,
         IWebHostEnvironment environment,
-        IFormFile file,
         string bucket,
         CancellationToken cancellationToken)
     {
+        var fileRead = await ReadUploadFileAsync(request, cancellationToken);
+        if (fileRead.Result is not null)
+        {
+            return fileRead.Result;
+        }
+
         var upload = await SaveImageAsync(
             request,
             environment,
-            file,
+            fileRead.File!,
             bucket,
             $"{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}",
             cancellationToken);
 
         return upload.Result ?? Results.Ok(upload.Response);
+    }
+
+    private static async Task<(IResult? Result, IFormFile? File)> ReadUploadFileAsync(
+        HttpRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!request.HasFormContentType)
+        {
+            return (Results.BadRequest(new { Message = "Upload must be sent as multipart/form-data." }), null);
+        }
+
+        var form = await request.ReadFormAsync(cancellationToken);
+        var file = form.Files.GetFile("file") ?? form.Files.FirstOrDefault();
+
+        if (file is null)
+        {
+            return (Results.BadRequest(new { Message = "Form field 'file' is required." }), null);
+        }
+
+        return (null, file);
     }
 
     private static async Task<(IResult? Result, UploadResponse? Response)> SaveImageAsync(
@@ -443,11 +492,16 @@ public static partial class AdminEndpoints
             return "Birth place must be at most 255 characters.";
         }
 
+        if (request.BirthDate is not null && request.BirthDate > DateOnly.FromDateTime(DateTime.UtcNow))
+        {
+            return "Birth date cannot be in the future.";
+        }
+
         return null;
     }
 
     private static async Task<string> EnsureUniqueSlugAsync(
-        AppDbContext dbContext,
+        IRepository<Genre> genreRepository,
         string slug,
         int? excludedGenreId,
         CancellationToken cancellationToken)
@@ -455,7 +509,7 @@ public static partial class AdminEndpoints
         var uniqueSlug = slug;
         var suffix = 2;
 
-        while (await dbContext.Genres.AnyAsync(
+        while (await genreRepository.Query().AnyAsync(
             genre => genre.Slug == uniqueSlug && (excludedGenreId == null || genre.Id != excludedGenreId),
             cancellationToken))
         {

@@ -1,8 +1,20 @@
 <Solution>
   <Folder Name="/backend/">
+    <Project Path="backend/CinemaCity.Gateway.Tests/CinemaCity.Gateway.Tests.csproj" />
+    <Project Path="backend/CinemaCity.CommunityService/CinemaCity.CommunityService.csproj" />
     <Project Path="backend/CinemaCity.API/CinemaCity.API.csproj" />
+    <Project Path="backend/CinemaCity.ApiGateway/CinemaCity.ApiGateway.csproj" />
     <Project Path="backend/CinemaCity.Application/CinemaCity.Application.csproj" />
+    <Project Path="backend/CinemaCity.AuthService/CinemaCity.AuthService.csproj" />
+    <Project Path="backend/CinemaCity.CatalogService/CinemaCity.CatalogService.csproj" />
     <Project Path="backend/CinemaCity.Domain/CinemaCity.Domain.csproj" />
+    <Project Path="backend/CinemaCity.Extraction.Tests/CinemaCity.Extraction.Tests.csproj" />
     <Project Path="backend/CinemaCity.Infrastructure/CinemaCity.Infrastructure.csproj" />
+    <Project Path="backend/CinemaCity.ServiceDefaults/CinemaCity.ServiceDefaults.csproj" />
+    <Project Path="backend/CinemaCity.Tests/CinemaCity.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/CinemaCity.DefenseDemo/CinemaCity.DefenseDemo.csproj" />
+    <Project Path="tools/CinemaCity.DataMigration/CinemaCity.DataMigration.csproj" />
   </Folder>
 </Solution>

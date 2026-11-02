@@ -1,4 +1,5 @@
 using System.Text;
+using System.Security.Claims;
 using CinemaCity.Domain.Enums;
 using CinemaCity.Domain.Entities;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -6,6 +7,7 @@ using Microsoft.AspNetCore.Authentication.Google;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.IdentityModel.Tokens;
+using Microsoft.Extensions.Options;
 
 namespace CinemaCity.API.Auth;
 
@@ -15,14 +17,9 @@ public static class AuthSetup
 
     public static IServiceCollection AddCinemaCityAuth(this IServiceCollection services, IConfiguration configuration)
     {
-        var jwtOptions = configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>() ?? new JwtOptions();
-
-        if (string.IsNullOrWhiteSpace(jwtOptions.Secret) || Encoding.UTF8.GetByteCount(jwtOptions.Secret) < 32)
-        {
-            throw new InvalidOperationException("Jwt:Secret must contain at least 32 bytes.");
-        }
-
-        services.Configure<JwtOptions>(configuration.GetSection(JwtOptions.SectionName));
+        services.AddOptions<JwtOptions>().Bind(configuration.GetSection(JwtOptions.SectionName))
+            .Validate(options => !string.IsNullOrWhiteSpace(options.Secret) && Encoding.UTF8.GetByteCount(options.Secret) >= 32, "Jwt:Secret must contain at least 32 bytes.")
+            .ValidateOnStart();
         services.AddScoped<TokenService>();
         services.AddScoped<IPasswordHasher<User>, PasswordHasher<User>>();
 
@@ -33,8 +30,11 @@ public static class AuthSetup
                 options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
             })
             .AddCookie(CookieAuthenticationDefaults.AuthenticationScheme)
-            .AddJwtBearer(options =>
+            .AddJwtBearer();
+        services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
+            .Configure<IOptions<JwtOptions>>((options, configured) =>
             {
+                var jwtOptions = configured.Value;
                 options.TokenValidationParameters = new TokenValidationParameters
                 {
                     ValidateIssuer = true,
@@ -44,10 +44,13 @@ public static class AuthSetup
                     ValidIssuer = jwtOptions.Issuer,
                     ValidAudience = jwtOptions.Audience,
                     IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOptions.Secret)),
+                    NameClaimType = ClaimTypes.Name,
+                    RoleClaimType = ClaimTypes.Role,
                     ClockSkew = TimeSpan.FromSeconds(30)
                 };
-            })
-            .AddGoogle(GoogleDefaults.AuthenticationScheme, options =>
+            });
+        if (!string.IsNullOrWhiteSpace(configuration["Google:ClientId"]))
+            services.AddAuthentication().AddGoogle(GoogleDefaults.AuthenticationScheme, options =>
             {
                 options.SignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
                 options.ClientId = configuration["Google:ClientId"] ?? string.Empty;

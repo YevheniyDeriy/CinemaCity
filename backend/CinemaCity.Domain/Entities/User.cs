@@ -11,7 +11,6 @@ public class User
     public string? GoogleId { get; set; }
     public string? AvatarUrl { get; set; }
     public UserRole Role { get; set; } = UserRole.User;
-    public bool IsEmailConfirmed { get; set; }
     public int FailedLoginAttempts { get; set; }
     public DateTimeOffset? LockoutEndAt { get; set; }
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;

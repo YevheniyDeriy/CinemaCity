@@ -1,5 +1,7 @@
 using CinemaCity.Application.Imports;
+using CinemaCity.Application.Persistence;
 using CinemaCity.Infrastructure.Data;
+using CinemaCity.Infrastructure.Persistence;
 using CinemaCity.Infrastructure.Tmdb;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -18,6 +20,12 @@ public static class DependencyInjection
         {
             options.UseNpgsql(connectionString);
         });
+
+        services.AddScoped<IDatabaseManager, DatabaseManager>();
+        services.AddScoped<IUnitOfWork, UnitOfWork>();
+        services.AddScoped(typeof(IRepository<>), typeof(EfRepository<>));
+        services.AddScoped<IUserRepository, UserRepository>();
+        services.AddScoped<IRefreshTokenRepository, RefreshTokenRepository>();
 
         services.Configure<TmdbOptions>(configuration.GetSection(TmdbOptions.SectionName));
         services.AddHttpClient<TmdbClient>((serviceProvider, client) =>

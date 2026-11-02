@@ -39,11 +39,38 @@ internal sealed record TmdbTvShowDetails(
     [property: JsonPropertyName("vote_count")] int VoteCount,
     [property: JsonPropertyName("number_of_seasons")] int? NumberOfSeasons,
     [property: JsonPropertyName("number_of_episodes")] int? NumberOfEpisodes,
+    [property: JsonPropertyName("seasons")] IReadOnlyCollection<TmdbSeasonSummary>? Seasons,
     [property: JsonPropertyName("genres")] IReadOnlyCollection<TmdbGenre>? Genres,
     [property: JsonPropertyName("production_countries")] IReadOnlyCollection<TmdbCountry>? ProductionCountries,
     [property: JsonPropertyName("spoken_languages")] IReadOnlyCollection<TmdbLanguage>? SpokenLanguages,
     [property: JsonPropertyName("status")] string? Status,
     [property: JsonPropertyName("tagline")] string? Tagline);
+
+internal sealed record TmdbSeasonSummary(
+    [property: JsonPropertyName("id")] int Id,
+    [property: JsonPropertyName("season_number")] int SeasonNumber,
+    [property: JsonPropertyName("name")] string? Name,
+    [property: JsonPropertyName("overview")] string? Overview,
+    [property: JsonPropertyName("air_date")] DateOnly? AirDate,
+    [property: JsonPropertyName("episode_count")] int? EpisodeCount);
+
+internal sealed record TmdbSeasonDetails(
+    [property: JsonPropertyName("id")] int Id,
+    [property: JsonPropertyName("season_number")] int SeasonNumber,
+    [property: JsonPropertyName("name")] string? Name,
+    [property: JsonPropertyName("overview")] string? Overview,
+    [property: JsonPropertyName("air_date")] DateOnly? AirDate,
+    [property: JsonPropertyName("episodes")] IReadOnlyCollection<TmdbEpisodeDetails>? Episodes);
+
+internal sealed record TmdbEpisodeDetails(
+    [property: JsonPropertyName("id")] int Id,
+    [property: JsonPropertyName("episode_number")] int EpisodeNumber,
+    [property: JsonPropertyName("name")] string? Name,
+    [property: JsonPropertyName("overview")] string? Overview,
+    [property: JsonPropertyName("air_date")] DateOnly? AirDate,
+    [property: JsonPropertyName("runtime")] int? Runtime,
+    [property: JsonPropertyName("vote_average")] decimal VoteAverage,
+    [property: JsonPropertyName("vote_count")] int VoteCount);
 
 internal sealed record TmdbGenre(
     [property: JsonPropertyName("id")] int Id,
@@ -61,6 +88,27 @@ internal sealed record TmdbLanguage(
 internal sealed record TmdbCredits(
     [property: JsonPropertyName("cast")] IReadOnlyCollection<TmdbCastMember>? Cast,
     [property: JsonPropertyName("crew")] IReadOnlyCollection<TmdbCrewMember>? Crew);
+
+internal sealed record TmdbVideosResponse(
+    [property: JsonPropertyName("results")] IReadOnlyCollection<TmdbVideo>? Results);
+
+internal sealed record TmdbVideo(
+    [property: JsonPropertyName("key")] string? Key,
+    [property: JsonPropertyName("site")] string? Site,
+    [property: JsonPropertyName("type")] string? Type,
+    [property: JsonPropertyName("official")] bool Official,
+    [property: JsonPropertyName("published_at")] DateTimeOffset? PublishedAt);
+
+internal sealed record TmdbTranslationsResponse(
+    [property: JsonPropertyName("translations")] IReadOnlyCollection<TmdbTranslation>? Translations);
+
+internal sealed record TmdbTranslation(
+    [property: JsonPropertyName("iso_3166_1")] string? CountryCode,
+    [property: JsonPropertyName("iso_639_1")] string? LanguageCode,
+    [property: JsonPropertyName("data")] TmdbTranslationData? Data);
+
+internal sealed record TmdbTranslationData(
+    [property: JsonPropertyName("overview")] string? Overview);
 
 internal sealed record TmdbCastMember(
     [property: JsonPropertyName("id")] int Id,

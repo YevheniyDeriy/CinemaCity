@@ -1,3 +1,5 @@
+using CinemaCity.API.Integration;
+using CinemaCity.ServiceDefaults;
 using CinemaCity.API;
 using CinemaCity.API.Admin;
 using CinemaCity.API.Auth;
@@ -9,91 +11,50 @@ using CinemaCity.API.Reviews;
 using CinemaCity.API.Search;
 using CinemaCity.API.Series;
 using CinemaCity.Application;
+using CinemaCity.Application.Persistence;
 using CinemaCity.Domain.Entities;
 using CinemaCity.Domain.Enums;
 using CinemaCity.Infrastructure;
-using CinemaCity.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi;
+using System.Text.Json.Serialization;
 
+LocalDevelopmentEnvironment.Load("CinemaCity.API");
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddCinemaCityAuth(builder.Configuration);
-builder.Services.AddCors(options =>
-{
-    options.AddPolicy("Frontend", policy =>
-    {
-        policy
-            .WithOrigins("http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:5174", "http://127.0.0.1:5174")
-            .AllowAnyHeader()
-            .AllowAnyMethod()
-            .AllowCredentials();
-    });
-});
 builder.Services.AddOpenApi();
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen(options =>
-{
-    options.SwaggerDoc("v1", new OpenApiInfo
-    {
-        Title = "CinemaCity API",
-        Version = "v1",
-        Description = "API для каталогу, автентифікації та керування CinemaCity."
-    });
-
-    options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
-    {
-        Name = "Authorization",
-        Type = SecuritySchemeType.Http,
-        Scheme = "bearer",
-        BearerFormat = "JWT",
-        In = ParameterLocation.Header,
-        Description = "Вставте JWT access token з відповіді login без префікса Bearer."
-    });
-
-    options.AddSecurityRequirement(document => new OpenApiSecurityRequirement
-    {
-        [new OpenApiSecuritySchemeReference("Bearer", document, null)] = []
-    });
-});
+builder.Services.AddServiceDefaults(builder.Configuration, "CinemaCity API — моноліт");
+builder.Services.AddCommunityIntegration(builder.Configuration);
 
 var app = builder.Build();
 
-using (var scope = app.Services.CreateScope())
+if (app.Configuration.GetValue("Database:MigrateOnStartup", true)) using (var scope = app.Services.CreateScope())
 {
-    var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    await dbContext.Database.MigrateAsync();
-    await EnsureSampleEpisodesAsync(dbContext);
+    var databaseManager = scope.ServiceProvider.GetRequiredService<IDatabaseManager>();
+    await databaseManager.MigrateAsync();
+    if (!app.Configuration.GetValue("Services:Enabled", false)) await EnsureSampleEpisodesAsync(
+        scope.ServiceProvider.GetRequiredService<IRepository<Movie>>(),
+        scope.ServiceProvider.GetRequiredService<IRepository<Season>>(),
+        scope.ServiceProvider.GetRequiredService<IRepository<Episode>>(),
+        scope.ServiceProvider.GetRequiredService<IUnitOfWork>());
 }
 
-if (app.Environment.IsDevelopment())
+// Normalize versioned community URLs before endpoint selection. Legacy URLs remain compatibility aliases.
+app.Use(async (context, next) =>
 {
-    var seedLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("DevelopmentDataSeeder");
-    await DevelopmentDataSeeder.SeedAsync(app.Services, seedLogger);
-}
-
-if (app.Environment.IsDevelopment())
-{
-    app.MapOpenApi();
-    app.UseSwagger();
-    app.UseSwaggerUI(options =>
-    {
-        options.SwaggerEndpoint("/swagger/v1/swagger.json", "CinemaCity API v1");
-        options.DocumentTitle = "CinemaCity API";
-    });
-}
-
-if (!app.Environment.IsDevelopment())
-{
-    app.UseHttpsRedirection();
-}
-
-app.UseCors("Frontend");
+    if (context.Request.Path.StartsWithSegments("/api/v1", out var remainder)) context.Request.Path = "/api" + remainder;
+    await next(context);
+});
+app.UseRouting();
+app.UseServiceDefaults();
 app.UseStaticFiles();
-app.UseAuthentication();
-app.UseAuthorization();
+if (app.Configuration.GetValue("Services:Enabled", false)) app.UseMiddleware<ReferenceProjectionMiddleware>();
+if (app.Environment.IsDevelopment()) app.MapOpenApi();
+app.MapDatabaseHealth<CinemaCity.Infrastructure.Data.AppDbContext>("CinemaCity.Monolith");
+app.MapCommunityInternalEndpoints();
 
 app.MapGet("/", () => Results.Ok(new
 {
@@ -101,36 +62,43 @@ app.MapGet("/", () => Results.Ok(new
     Version = "1.0"
 }));
 
-app.MapGet("/health/database", async (AppDbContext dbContext, CancellationToken cancellationToken) =>
+app.MapGet("/health/database", async (IDatabaseManager databaseManager, CancellationToken cancellationToken) =>
 {
-    var canConnect = await dbContext.Database.CanConnectAsync(cancellationToken);
+    var canConnect = await databaseManager.CanConnectAsync(cancellationToken);
 
     return canConnect
         ? Results.Ok(new { Database = "PostgreSQL", Status = "Available" })
-        : Results.Problem("PostgreSQL is unavailable");
+        : Results.Problem("PostgreSQL is unavailable", statusCode: 503);
 })
 .WithName("DatabaseHealth");
 
-app.MapAuthEndpoints();
-app.MapAdminEndpoints();
+if (!app.Configuration.GetValue("Services:Enabled", false))
+{
+    app.MapAuthEndpoints();
+    app.MapAdminEndpoints();
+    app.MapMovieEndpoints();
+    app.MapSeriesEndpoints();
+    app.MapSearchEndpoints();
+}
 app.MapHomeEndpoints();
-app.MapMovieEndpoints();
-app.MapSeriesEndpoints();
 app.MapRatingEndpoints();
 app.MapReviewEndpoints();
 app.MapProfileEndpoints();
-app.MapSearchEndpoints();
 
 app.Run();
 
-static async Task EnsureSampleEpisodesAsync(AppDbContext dbContext)
+static async Task EnsureSampleEpisodesAsync(
+    IRepository<Movie> movieRepository,
+    IRepository<Season> seasonRepository,
+    IRepository<Episode> episodeRepository,
+    IUnitOfWork unitOfWork)
 {
-    if (await dbContext.Seasons.AnyAsync())
+    if (await seasonRepository.Query().AnyAsync())
     {
         return;
     }
 
-    var series = await dbContext.Movies
+    var series = await movieRepository.Query()
         .Where(movie => !movie.IsDeleted && movie.ContentType == ContentType.Series)
         .OrderByDescending(movie => movie.AverageRating)
         .FirstOrDefaultAsync();
@@ -202,7 +170,9 @@ static async Task EnsureSampleEpisodesAsync(AppDbContext dbContext)
         }
     };
 
-    dbContext.Seasons.Add(season);
-    dbContext.Episodes.AddRange(episodes);
-    await dbContext.SaveChangesAsync();
+    seasonRepository.Add(season);
+    episodeRepository.AddRange(episodes);
+    await unitOfWork.SaveChangesAsync();
 }
+
+public partial class Program;

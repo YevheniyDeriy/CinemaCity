@@ -1,9 +1,9 @@
 using System.Text;
 using System.Text.RegularExpressions;
 using CinemaCity.Application.Imports;
+using CinemaCity.Application.Persistence;
 using CinemaCity.Domain.Entities;
 using CinemaCity.Domain.Enums;
-using CinemaCity.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
@@ -11,7 +11,16 @@ namespace CinemaCity.Infrastructure.Tmdb;
 
 internal sealed partial class TmdbImportService(
     TmdbClient tmdbClient,
-    AppDbContext dbContext,
+    IRepository<Movie> movieRepository,
+    IRepository<MovieCast> movieCastRepository,
+    IRepository<Genre> genreRepository,
+    IRepository<Country> countryRepository,
+    IRepository<Language> languageRepository,
+    IRepository<Person> personRepository,
+    IRepository<Season> seasonRepository,
+    IRepository<Episode> episodeRepository,
+    IRepository<Rating> ratingRepository,
+    IUnitOfWork unitOfWork,
     ILogger<TmdbImportService> logger) : ITmdbImportService
 {
     private const string PosterBaseUrl = "https://image.tmdb.org/t/p/w500";
@@ -41,7 +50,7 @@ internal sealed partial class TmdbImportService(
                     await ImportMovieByTmdbIdAsync(item.Id, result, cancellationToken);
                 }
 
-                await dbContext.SaveChangesAsync(cancellationToken);
+                await unitOfWork.SaveChangesAsync(cancellationToken);
             }
             catch (OperationCanceledException)
             {
@@ -87,7 +96,7 @@ internal sealed partial class TmdbImportService(
                     await ImportTvShowByTmdbIdAsync(item.Id, result, cancellationToken);
                 }
 
-                await dbContext.SaveChangesAsync(cancellationToken);
+                await unitOfWork.SaveChangesAsync(cancellationToken);
             }
             catch (OperationCanceledException)
             {
@@ -118,7 +127,7 @@ internal sealed partial class TmdbImportService(
         logger.LogInformation("Starting TMDB movie detail import for TMDB ID {TmdbId}.", tmdbId);
 
         await ImportMovieByTmdbIdAsync(tmdbId, result, cancellationToken);
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
         logger.LogInformation(
             "Finished TMDB movie detail import for TMDB ID {TmdbId}. Added: {Added}, updated: {Updated}, skipped: {Skipped}, errors: {Errors}.",
@@ -137,7 +146,9 @@ internal sealed partial class TmdbImportService(
         {
             var details = await tmdbClient.GetMovieDetailsAsync(tmdbId, cancellationToken);
             var credits = await tmdbClient.GetMovieCreditsAsync(tmdbId, cancellationToken);
-            await UpsertMovieAsync(details, credits, result, cancellationToken);
+            var videos = await tmdbClient.GetMovieVideosAsync(tmdbId, cancellationToken);
+            var translations = await tmdbClient.GetMovieTranslationsAsync(tmdbId, cancellationToken);
+            await UpsertMovieAsync(details, credits, videos, translations, result, cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -156,7 +167,9 @@ internal sealed partial class TmdbImportService(
         {
             var details = await tmdbClient.GetTvShowDetailsAsync(tmdbId, cancellationToken);
             var credits = await tmdbClient.GetTvShowCreditsAsync(tmdbId, cancellationToken);
-            await UpsertTvShowAsync(details, credits, result, cancellationToken);
+            var videos = await tmdbClient.GetTvShowVideosAsync(tmdbId, cancellationToken);
+            var translations = await tmdbClient.GetTvShowTranslationsAsync(tmdbId, cancellationToken);
+            await UpsertTvShowAsync(details, credits, videos, translations, result, cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -172,6 +185,8 @@ internal sealed partial class TmdbImportService(
     private async Task UpsertMovieAsync(
         TmdbMovieDetails details,
         TmdbCredits credits,
+        TmdbVideosResponse videos,
+        TmdbTranslationsResponse translations,
         ImportAccumulator result,
         CancellationToken cancellationToken)
     {
@@ -183,7 +198,13 @@ internal sealed partial class TmdbImportService(
             return;
         }
 
-        var movie = await LoadMovieAsync(ContentType.Movie, details.Id, cancellationToken);
+        var movie = await LoadMovieAsync(
+            ContentType.Movie,
+            details.Id,
+            title,
+            TrimOrNull(details.OriginalTitle),
+            details.ReleaseDate?.Year ?? 0,
+            cancellationToken);
         var isNew = movie is null;
         movie ??= new Movie
         {
@@ -193,11 +214,12 @@ internal sealed partial class TmdbImportService(
             CreatedAt = DateTimeOffset.UtcNow
         };
 
+        movie.TmdbId = details.Id;
         movie.Title = title;
         movie.OriginalTitle = TrimOrNull(details.OriginalTitle);
         movie.ReleaseYear = details.ReleaseDate?.Year ?? 0;
         movie.Duration = details.Runtime;
-        movie.Description = TrimOrNull(details.Overview);
+        movie.Description = PickOverview(translations, details.Overview);
         movie.Status = TrimOrNull(details.Status);
         movie.Tagline = TrimOrNull(details.Tagline);
         movie.FirstAirDate = null;
@@ -206,6 +228,7 @@ internal sealed partial class TmdbImportService(
         movie.EpisodesCount = null;
         movie.PosterUrl = BuildPosterUrl(details.PosterPath);
         movie.BackdropUrl = BuildBackdropUrl(details.BackdropPath);
+        movie.TrailerYoutubeId = PickYoutubeTrailerId(videos) ?? movie.TrailerYoutubeId;
         movie.AverageRating = RoundRating(details.VoteAverage);
         movie.RatingsCount = details.VoteCount;
         movie.IsDeleted = false;
@@ -213,11 +236,11 @@ internal sealed partial class TmdbImportService(
         movie.UpdatedAt = isNew ? null : DateTimeOffset.UtcNow;
 
         await SyncDictionariesAsync(movie, details.Genres, details.ProductionCountries, details.SpokenLanguages, cancellationToken);
-        await SyncCreditsAsync(movie, credits, cancellationToken);
+        await SyncCreditsAsync(movie, credits, isNew, cancellationToken);
 
         if (isNew)
         {
-            dbContext.Movies.Add(movie);
+            movieRepository.Add(movie);
             result.Added++;
         }
         else
@@ -229,6 +252,8 @@ internal sealed partial class TmdbImportService(
     private async Task UpsertTvShowAsync(
         TmdbTvShowDetails details,
         TmdbCredits credits,
+        TmdbVideosResponse videos,
+        TmdbTranslationsResponse translations,
         ImportAccumulator result,
         CancellationToken cancellationToken)
     {
@@ -240,7 +265,13 @@ internal sealed partial class TmdbImportService(
             return;
         }
 
-        var series = await LoadMovieAsync(ContentType.Series, details.Id, cancellationToken);
+        var series = await LoadMovieAsync(
+            ContentType.Series,
+            details.Id,
+            title,
+            TrimOrNull(details.OriginalName),
+            details.FirstAirDate?.Year ?? 0,
+            cancellationToken);
         var isNew = series is null;
         series ??= new Movie
         {
@@ -250,11 +281,12 @@ internal sealed partial class TmdbImportService(
             CreatedAt = DateTimeOffset.UtcNow
         };
 
+        series.TmdbId = details.Id;
         series.Title = title;
         series.OriginalTitle = TrimOrNull(details.OriginalName);
         series.ReleaseYear = details.FirstAirDate?.Year ?? 0;
         series.Duration = null;
-        series.Description = TrimOrNull(details.Overview);
+        series.Description = PickOverview(translations, details.Overview);
         series.Status = TrimOrNull(details.Status);
         series.Tagline = TrimOrNull(details.Tagline);
         series.FirstAirDate = details.FirstAirDate;
@@ -263,6 +295,7 @@ internal sealed partial class TmdbImportService(
         series.EpisodesCount = details.NumberOfEpisodes;
         series.PosterUrl = BuildPosterUrl(details.PosterPath);
         series.BackdropUrl = BuildBackdropUrl(details.BackdropPath);
+        series.TrailerYoutubeId = PickYoutubeTrailerId(videos) ?? series.TrailerYoutubeId;
         series.AverageRating = RoundRating(details.VoteAverage);
         series.RatingsCount = details.VoteCount;
         series.IsDeleted = false;
@@ -270,11 +303,12 @@ internal sealed partial class TmdbImportService(
         series.UpdatedAt = isNew ? null : DateTimeOffset.UtcNow;
 
         await SyncDictionariesAsync(series, details.Genres, details.ProductionCountries, details.SpokenLanguages, cancellationToken);
-        await SyncCreditsAsync(series, credits, cancellationToken);
+        await SyncCreditsAsync(series, credits, isNew, cancellationToken);
+        await SyncTvSeasonsAsync(series, details, cancellationToken);
 
         if (isNew)
         {
-            dbContext.Movies.Add(series);
+            movieRepository.Add(series);
             result.Added++;
         }
         else
@@ -283,14 +317,216 @@ internal sealed partial class TmdbImportService(
         }
     }
 
-    private Task<Movie?> LoadMovieAsync(ContentType contentType, int tmdbId, CancellationToken cancellationToken)
+    private async Task SyncTvSeasonsAsync(Movie series, TmdbTvShowDetails details, CancellationToken cancellationToken)
     {
-        return dbContext.Movies
+        var seasonSummaries = (details.Seasons ?? [])
+            .Where(season => season.SeasonNumber > 0)
+            .OrderBy(season => season.SeasonNumber)
+            .ToArray();
+
+        foreach (var summary in seasonSummaries)
+        {
+            TmdbSeasonDetails? seasonDetails;
+            TmdbSeasonDetails? ukrainianSeasonDetails = null;
+
+            try
+            {
+                seasonDetails = await tmdbClient.GetTvSeasonDetailsAsync(details.Id, summary.SeasonNumber, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning(
+                    exception,
+                    "TMDB TV show {TmdbId} season {SeasonNumber} failed.",
+                    details.Id,
+                    summary.SeasonNumber);
+                continue;
+            }
+
+            try
+            {
+                ukrainianSeasonDetails = await tmdbClient.GetTvSeasonDetailsAsync(details.Id, summary.SeasonNumber, cancellationToken, "uk-UA");
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                logger.LogWarning(
+                    exception,
+                    "TMDB TV show {TmdbId} season {SeasonNumber} Ukrainian localization failed.",
+                    details.Id,
+                    summary.SeasonNumber);
+            }
+
+            var season = await GetOrCreateSeasonAsync(series, summary, seasonDetails, ukrainianSeasonDetails, cancellationToken);
+            await SyncEpisodesAsync(season, seasonDetails, ukrainianSeasonDetails, cancellationToken);
+        }
+
+        if (seasonSummaries.Length > 0)
+        {
+            series.SeasonsCount = seasonSummaries.Length;
+            series.EpisodesCount = seasonSummaries.Sum(season => season.EpisodeCount ?? 0);
+        }
+    }
+
+    private async Task<Season> GetOrCreateSeasonAsync(
+        Movie series,
+        TmdbSeasonSummary summary,
+        TmdbSeasonDetails details,
+        TmdbSeasonDetails? ukrainianDetails,
+        CancellationToken cancellationToken)
+    {
+        var season = seasonRepository.Local.FirstOrDefault(candidate =>
+            candidate.SeriesId == series.Id && candidate.SeasonNumber == summary.SeasonNumber);
+
+        season ??= await seasonRepository.Query()
+            .FirstOrDefaultAsync(
+                candidate => candidate.SeriesId == series.Id && candidate.SeasonNumber == summary.SeasonNumber,
+                cancellationToken);
+
+        var title = TrimOrNull(details.Name) ?? TrimOrNull(summary.Name);
+        var overview = PickOverview(ukrainianDetails?.Overview, details.Overview) ?? TrimOrNull(summary.Overview);
+
+        if (season is null)
+        {
+            season = new Season
+            {
+                Id = Guid.NewGuid(),
+                SeriesId = series.Id,
+                SeasonNumber = summary.SeasonNumber
+            };
+            seasonRepository.Add(season);
+        }
+
+        season.Title = title;
+        season.Description = overview;
+        season.ReleaseYear = details.AirDate?.Year ?? summary.AirDate?.Year;
+
+        return season;
+    }
+
+    private async Task SyncEpisodesAsync(
+        Season season,
+        TmdbSeasonDetails seasonDetails,
+        TmdbSeasonDetails? ukrainianSeasonDetails,
+        CancellationToken cancellationToken)
+    {
+        var ukrainianEpisodesByNumber = (ukrainianSeasonDetails?.Episodes ?? [])
+            .Where(episode => episode.EpisodeNumber > 0)
+            .ToDictionary(episode => episode.EpisodeNumber);
+        var existingEpisodesByNumber = await LoadSeasonEpisodesAsync(season.Id, cancellationToken);
+        var ratedEpisodeIds = existingEpisodesByNumber.Count == 0
+            ? []
+            : await LoadRatedEpisodeIdsAsync(existingEpisodesByNumber.Values.Select(episode => episode.Id), cancellationToken);
+
+        foreach (var tmdbEpisode in (seasonDetails.Episodes ?? [])
+            .Where(episode => episode.EpisodeNumber > 0)
+            .OrderBy(episode => episode.EpisodeNumber))
+        {
+            var title = TrimOrNull(tmdbEpisode.Name);
+            if (title is null)
+            {
+                continue;
+            }
+
+            existingEpisodesByNumber.TryGetValue(tmdbEpisode.EpisodeNumber, out var episode);
+            var isNew = episode is null;
+
+            if (episode is null)
+            {
+                episode = new Episode
+                {
+                    Id = Guid.NewGuid(),
+                    SeasonId = season.Id,
+                    EpisodeNumber = tmdbEpisode.EpisodeNumber
+                };
+                episodeRepository.Add(episode);
+                existingEpisodesByNumber[episode.EpisodeNumber] = episode;
+            }
+
+            episode.Title = title;
+            ukrainianEpisodesByNumber.TryGetValue(tmdbEpisode.EpisodeNumber, out var ukrainianEpisode);
+            episode.Description = PickOverview(ukrainianEpisode?.Overview, tmdbEpisode.Overview);
+            episode.AirDate = tmdbEpisode.AirDate;
+            episode.Duration = tmdbEpisode.Runtime;
+
+            if (isNew || !ratedEpisodeIds.Contains(episode.Id))
+            {
+                episode.AverageRating = RoundRating(tmdbEpisode.VoteAverage);
+                episode.RatingsCount = tmdbEpisode.VoteCount;
+            }
+        }
+    }
+
+    private async Task<Dictionary<int, Episode>> LoadSeasonEpisodesAsync(Guid seasonId, CancellationToken cancellationToken)
+    {
+        var episodes = episodeRepository.Local
+            .Where(episode => episode.SeasonId == seasonId)
+            .ToList();
+        var trackedEpisodeIds = episodes.Select(episode => episode.Id).ToHashSet();
+        var persistedEpisodes = await episodeRepository.Query()
+            .Where(episode => episode.SeasonId == seasonId && !trackedEpisodeIds.Contains(episode.Id))
+            .ToListAsync(cancellationToken);
+
+        episodes.AddRange(persistedEpisodes);
+        return episodes
+            .GroupBy(episode => episode.EpisodeNumber)
+            .ToDictionary(group => group.Key, group => group.First());
+    }
+
+    private async Task<HashSet<Guid>> LoadRatedEpisodeIdsAsync(IEnumerable<Guid> episodeIds, CancellationToken cancellationToken)
+    {
+        var ids = episodeIds.ToHashSet();
+        if (ids.Count == 0)
+        {
+            return [];
+        }
+
+        var ratedEpisodeIds = await ratingRepository.Query()
+            .Where(rating => rating.EpisodeId.HasValue && ids.Contains(rating.EpisodeId.Value))
+            .Select(rating => rating.EpisodeId!.Value)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+
+        return ratedEpisodeIds.ToHashSet();
+    }
+
+    private async Task<Movie?> LoadMovieAsync(
+        ContentType contentType,
+        int tmdbId,
+        string title,
+        string? originalTitle,
+        int releaseYear,
+        CancellationToken cancellationToken)
+    {
+        var local = movieRepository.Local.FirstOrDefault(movie =>
+            movie.ContentType == contentType
+            && (movie.TmdbId == tmdbId
+                || IsSameTitle(movie, title, originalTitle, releaseYear)));
+
+        if (local is not null)
+        {
+            return local;
+        }
+
+        return await movieRepository.Query()
             .Include(movie => movie.Genres)
             .Include(movie => movie.Countries)
             .Include(movie => movie.Languages)
             .FirstOrDefaultAsync(
-                movie => movie.ContentType == contentType && movie.TmdbId == tmdbId,
+                movie => movie.ContentType == contentType
+                    && (movie.TmdbId == tmdbId
+                        || (movie.ReleaseYear == releaseYear
+                            && (movie.Title.ToLower() == title.ToLower()
+                                || (originalTitle != null
+                                    && movie.OriginalTitle != null
+                                    && movie.OriginalTitle.ToLower() == originalTitle.ToLower())))),
                 cancellationToken);
     }
 
@@ -332,11 +568,11 @@ internal sealed partial class TmdbImportService(
         }
     }
 
-    private async Task SyncCreditsAsync(Movie movie, TmdbCredits credits, CancellationToken cancellationToken)
+    private async Task SyncCreditsAsync(Movie movie, TmdbCredits credits, bool isNew, CancellationToken cancellationToken)
     {
-        if (dbContext.Entry(movie).State != EntityState.Added)
+        if (!isNew)
         {
-            await dbContext.MovieCast
+            await movieCastRepository.Query()
                 .Where(cast => cast.MovieId == movie.Id)
                 .ExecuteDeleteAsync(cancellationToken);
         }
@@ -358,7 +594,7 @@ internal sealed partial class TmdbImportService(
                 continue;
             }
 
-            dbContext.MovieCast.Add(new MovieCast
+            movieCastRepository.Add(new MovieCast
             {
                 Id = Guid.NewGuid(),
                 MovieId = movie.Id,
@@ -386,7 +622,7 @@ internal sealed partial class TmdbImportService(
                 continue;
             }
 
-            dbContext.MovieCast.Add(new MovieCast
+            movieCastRepository.Add(new MovieCast
             {
                 Id = Guid.NewGuid(),
                 MovieId = movie.Id,
@@ -407,10 +643,10 @@ internal sealed partial class TmdbImportService(
             return null;
         }
 
-        var genre = dbContext.Genres.Local.FirstOrDefault(
+        var genre = genreRepository.Local.FirstOrDefault(
             candidate => candidate.TmdbId == tmdbGenre.Id || string.Equals(candidate.Name, name, StringComparison.OrdinalIgnoreCase));
 
-        genre ??= await dbContext.Genres.FirstOrDefaultAsync(
+        genre ??= await genreRepository.Query().FirstOrDefaultAsync(
             candidate => candidate.TmdbId == tmdbGenre.Id || candidate.Name == name,
             cancellationToken);
 
@@ -431,7 +667,7 @@ internal sealed partial class TmdbImportService(
             Slug = await EnsureUniqueGenreSlugAsync(Slugify(name), cancellationToken)
         };
 
-        dbContext.Genres.Add(genre);
+        genreRepository.Add(genre);
         return genre;
     }
 
@@ -444,11 +680,11 @@ internal sealed partial class TmdbImportService(
             return null;
         }
 
-        var country = dbContext.Countries.Local.FirstOrDefault(
+        var country = countryRepository.Local.FirstOrDefault(
             candidate => (code != null && candidate.Code == code)
                 || (name != null && string.Equals(candidate.Name, name, StringComparison.OrdinalIgnoreCase)));
 
-        country ??= await dbContext.Countries.FirstOrDefaultAsync(
+        country ??= await countryRepository.Query().FirstOrDefaultAsync(
             candidate => (code != null && candidate.Code == code) || (name != null && candidate.Name == name),
             cancellationToken);
 
@@ -468,7 +704,7 @@ internal sealed partial class TmdbImportService(
             Name = name ?? code!,
             Code = code
         };
-        dbContext.Countries.Add(country);
+        countryRepository.Add(country);
         return country;
     }
 
@@ -481,11 +717,11 @@ internal sealed partial class TmdbImportService(
             return null;
         }
 
-        var language = dbContext.Languages.Local.FirstOrDefault(
+        var language = languageRepository.Local.FirstOrDefault(
             candidate => (code != null && candidate.Code == code)
                 || (name != null && string.Equals(candidate.Name, name, StringComparison.OrdinalIgnoreCase)));
 
-        language ??= await dbContext.Languages.FirstOrDefaultAsync(
+        language ??= await languageRepository.Query().FirstOrDefaultAsync(
             candidate => (code != null && candidate.Code == code) || (name != null && candidate.Name == name),
             cancellationToken);
 
@@ -505,7 +741,7 @@ internal sealed partial class TmdbImportService(
             Name = name ?? code!,
             Code = code
         };
-        dbContext.Languages.Add(language);
+        languageRepository.Add(language);
         return language;
     }
 
@@ -516,10 +752,10 @@ internal sealed partial class TmdbImportService(
         CancellationToken cancellationToken)
     {
         var name = fullName.Trim();
-        var person = dbContext.Persons.Local.FirstOrDefault(
+        var person = personRepository.Local.FirstOrDefault(
             candidate => candidate.TmdbId == tmdbId || string.Equals(candidate.FullName, name, StringComparison.OrdinalIgnoreCase));
 
-        person ??= await dbContext.Persons.FirstOrDefaultAsync(
+        person ??= await personRepository.Query().FirstOrDefaultAsync(
             candidate => candidate.TmdbId == tmdbId || candidate.FullName == name,
             cancellationToken);
 
@@ -543,7 +779,7 @@ internal sealed partial class TmdbImportService(
             PhotoUrl = BuildPosterUrl(profilePath),
             CreatedAt = DateTimeOffset.UtcNow
         };
-        dbContext.Persons.Add(person);
+        personRepository.Add(person);
         return person;
     }
 
@@ -552,8 +788,8 @@ internal sealed partial class TmdbImportService(
         var uniqueSlug = slug;
         var suffix = 2;
 
-        while (dbContext.Genres.Local.Any(genre => genre.Slug == uniqueSlug)
-            || await dbContext.Genres.AnyAsync(genre => genre.Slug == uniqueSlug, cancellationToken))
+        while (genreRepository.Local.Any(genre => genre.Slug == uniqueSlug)
+            || await genreRepository.Query().AnyAsync(genre => genre.Slug == uniqueSlug, cancellationToken))
         {
             uniqueSlug = $"{slug}-{suffix}";
             suffix++;
@@ -593,6 +829,58 @@ internal sealed partial class TmdbImportService(
     private static string? BuildBackdropUrl(string? path)
     {
         return string.IsNullOrWhiteSpace(path) ? null : $"{BackdropBaseUrl}{path}";
+    }
+
+    private static string? PickYoutubeTrailerId(TmdbVideosResponse videos)
+    {
+        return (videos.Results ?? [])
+            .Where(video =>
+                !string.IsNullOrWhiteSpace(video.Key)
+                && string.Equals(video.Site, "YouTube", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(video.Type, "Trailer", StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(video => video.Official)
+            .ThenByDescending(video => video.PublishedAt)
+            .Select(video => video.Key!.Trim())
+            .FirstOrDefault();
+    }
+
+    private static string? PickOverview(TmdbTranslationsResponse translations, string? fallbackOverview)
+    {
+        return PickUkrainianOverview(translations) ?? TrimOrNull(fallbackOverview);
+    }
+
+    private static string? PickOverview(string? localizedOverview, string? fallbackOverview)
+    {
+        return PickUkrainianOverview(localizedOverview) ?? TrimOrNull(fallbackOverview);
+    }
+
+    private static string? PickUkrainianOverview(TmdbTranslationsResponse translations)
+    {
+        return (translations.Translations ?? [])
+            .Where(translation => string.Equals(translation.LanguageCode, "uk", StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(translation => string.Equals(translation.CountryCode, "UA", StringComparison.OrdinalIgnoreCase))
+            .Select(translation => PickUkrainianOverview(translation.Data?.Overview))
+            .FirstOrDefault(overview => overview is not null);
+    }
+
+    private static string? PickUkrainianOverview(string? overview)
+    {
+        var trimmed = TrimOrNull(overview);
+        return trimmed is not null && ContainsCyrillic(trimmed) ? trimmed : null;
+    }
+
+    private static bool ContainsCyrillic(string value)
+    {
+        return value.Any(character => character is >= '\u0400' and <= '\u04FF');
+    }
+
+    private static bool IsSameTitle(Movie movie, string title, string? originalTitle, int releaseYear)
+    {
+        return movie.ReleaseYear == releaseYear
+            && (string.Equals(movie.Title, title, StringComparison.OrdinalIgnoreCase)
+                || (originalTitle is not null
+                    && movie.OriginalTitle is not null
+                    && string.Equals(movie.OriginalTitle, originalTitle, StringComparison.OrdinalIgnoreCase)));
     }
 
     private static decimal RoundRating(decimal value)

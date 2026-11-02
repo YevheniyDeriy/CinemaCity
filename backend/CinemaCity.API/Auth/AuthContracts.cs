@@ -12,8 +12,6 @@ public sealed record LoginRequest(string Email, string Password);
 
 public sealed record RefreshRequest(string? RefreshToken);
 
-public sealed record ConfirmEmailRequest(string Token);
-
 public sealed record AuthUserResponse(
     Guid Id,
     string Username,
@@ -25,10 +23,3 @@ public sealed record AuthResponse(
     string AccessToken,
     DateTimeOffset AccessTokenExpiresAt,
     AuthUserResponse User);
-
-public sealed record RegisterResponse(
-    Guid UserId,
-    string Username,
-    string Email,
-    bool IsEmailConfirmed,
-    string EmailConfirmationToken);

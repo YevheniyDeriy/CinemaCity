@@ -1,7 +1,7 @@
 using System.Security.Claims;
+using CinemaCity.Application.Persistence;
 using CinemaCity.Domain.Entities;
 using CinemaCity.Domain.Enums;
-using CinemaCity.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
 namespace CinemaCity.API.Reviews;
@@ -55,15 +55,17 @@ public static class ReviewEndpoints
         admin.MapPut("/{reviewId:guid}/approve", ApproveReviewAsync)
             .WithName("ApproveReview");
 
-        admin.MapPut("/{reviewId:guid}/reject", RejectReviewAsync)
-            .WithName("RejectReview");
-
         return routes;
     }
 
-    private static async Task<IResult> GetMovieReviewsAsync(Guid movieId, AppDbContext dbContext, CancellationToken cancellationToken)
+    private static async Task<IResult> GetMovieReviewsAsync(
+        Guid movieId,
+        ClaimsPrincipal principal,
+        IRepository<Movie> movieRepository,
+        IRepository<Review> reviewRepository,
+        CancellationToken cancellationToken)
     {
-        var movieExists = await dbContext.Movies
+        var movieExists = await movieRepository.Query()
             .AsNoTracking()
             .AnyAsync(movie => movie.Id == movieId && !movie.IsDeleted, cancellationToken);
 
@@ -72,15 +74,16 @@ public static class ReviewEndpoints
             return Results.NotFound(new { Message = "Movie was not found." });
         }
 
-        var reviews = await dbContext.Reviews
+        var reviews = await reviewRepository.Query()
             .AsNoTracking()
             .Include(review => review.User)
+            .Include(review => review.Likes)
             .Where(review =>
                 review.MovieId == movieId
                 && !review.IsDeleted
                 && review.Status == ReviewStatus.Approved)
             .OrderByDescending(review => review.CreatedAt)
-            .Select(review => ToResponse(review))
+            .Select(review => ToResponse(review, TryGetUserId(principal)))
             .ToListAsync(cancellationToken);
 
         return Results.Ok(reviews);
@@ -89,7 +92,9 @@ public static class ReviewEndpoints
     private static async Task<IResult> CreateReviewAsync(
         ReviewCreateRequest request,
         ClaimsPrincipal principal,
-        AppDbContext dbContext,
+        IRepository<Movie> movieRepository,
+        IRepository<Review> reviewRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
         var validation = ValidateReview(request.Content);
@@ -98,7 +103,7 @@ public static class ReviewEndpoints
             return Results.BadRequest(new { Message = validation });
         }
 
-        var movieExists = await dbContext.Movies
+        var movieExists = await movieRepository.Query()
             .AnyAsync(movie => movie.Id == request.MovieId && !movie.IsDeleted, cancellationToken);
 
         if (!movieExists)
@@ -107,7 +112,7 @@ public static class ReviewEndpoints
         }
 
         var userId = GetUserId(principal);
-        var duplicate = await dbContext.Reviews
+        var duplicate = await reviewRepository.Query()
             .AnyAsync(review => review.UserId == userId && review.MovieId == request.MovieId, cancellationToken);
 
         if (duplicate)
@@ -126,10 +131,10 @@ public static class ReviewEndpoints
             CreatedAt = DateTimeOffset.UtcNow
         };
 
-        dbContext.Reviews.Add(review);
-        await dbContext.SaveChangesAsync(cancellationToken);
+        reviewRepository.Add(review);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        var response = await LoadReviewResponseAsync(dbContext, review.Id, cancellationToken);
+        var response = await LoadReviewResponseAsync(reviewRepository, review.Id, userId, cancellationToken);
 
         return Results.Created($"/api/reviews/{review.Id}", response);
     }
@@ -138,7 +143,8 @@ public static class ReviewEndpoints
         Guid reviewId,
         ReviewUpdateRequest request,
         ClaimsPrincipal principal,
-        AppDbContext dbContext,
+        IRepository<Review> reviewRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
         var validation = ValidateReview(request.Content);
@@ -149,7 +155,7 @@ public static class ReviewEndpoints
 
         var userId = GetUserId(principal);
         var isAdmin = IsAdmin(principal);
-        var review = await dbContext.Reviews.FirstOrDefaultAsync(candidate => candidate.Id == reviewId, cancellationToken);
+        var review = await reviewRepository.Query().FirstOrDefaultAsync(candidate => candidate.Id == reviewId, cancellationToken);
 
         if (review is null || review.IsDeleted)
         {
@@ -165,9 +171,9 @@ public static class ReviewEndpoints
         review.IsSpoiler = request.IsSpoiler;
         review.UpdatedAt = DateTimeOffset.UtcNow;
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        var response = await LoadReviewResponseAsync(dbContext, review.Id, cancellationToken);
+        var response = await LoadReviewResponseAsync(reviewRepository, review.Id, userId, cancellationToken);
 
         return Results.Ok(response);
     }
@@ -175,12 +181,13 @@ public static class ReviewEndpoints
     private static async Task<IResult> DeleteReviewAsync(
         Guid reviewId,
         ClaimsPrincipal principal,
-        AppDbContext dbContext,
+        IRepository<Review> reviewRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
         var userId = GetUserId(principal);
         var isAdmin = IsAdmin(principal);
-        var review = await dbContext.Reviews.FirstOrDefaultAsync(candidate => candidate.Id == reviewId, cancellationToken);
+        var review = await reviewRepository.Query().FirstOrDefaultAsync(candidate => candidate.Id == reviewId, cancellationToken);
 
         if (review is null || review.IsDeleted)
         {
@@ -196,7 +203,7 @@ public static class ReviewEndpoints
         review.DeletedAt = DateTimeOffset.UtcNow;
         review.UpdatedAt = DateTimeOffset.UtcNow;
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Results.NoContent();
     }
@@ -204,13 +211,15 @@ public static class ReviewEndpoints
     private static async Task<IResult> LikeReviewAsync(
         Guid reviewId,
         ClaimsPrincipal principal,
-        AppDbContext dbContext,
+        IRepository<Review> reviewRepository,
+        IRepository<ReviewLike> reviewLikeRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
         var userId = GetUserId(principal);
-        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        await using var transaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
 
-        var review = await dbContext.Reviews
+        var review = await reviewRepository.Query()
             .FirstOrDefaultAsync(candidate =>
                 candidate.Id == reviewId
                 && !candidate.IsDeleted
@@ -222,24 +231,24 @@ public static class ReviewEndpoints
             return Results.NotFound(new { Message = "Review was not found." });
         }
 
-        var exists = await dbContext.ReviewLikes
+        var exists = await reviewLikeRepository.Query()
             .AnyAsync(candidate => candidate.ReviewId == reviewId && candidate.UserId == userId, cancellationToken);
 
         if (!exists)
         {
-            dbContext.ReviewLikes.Add(new ReviewLike
+            reviewLikeRepository.Add(new ReviewLike
             {
                 UserId = userId,
                 ReviewId = reviewId,
                 CreatedAt = DateTimeOffset.UtcNow
             });
 
-            await dbContext.SaveChangesAsync(cancellationToken);
-            await RecalculateReviewLikesAsync(dbContext, reviewId, cancellationToken);
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+            await RecalculateReviewLikesAsync(reviewRepository, reviewLikeRepository, unitOfWork, reviewId, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
         }
 
-        var response = await LoadReviewResponseAsync(dbContext, reviewId, cancellationToken);
+        var response = await LoadReviewResponseAsync(reviewRepository, reviewId, userId, cancellationToken);
 
         return Results.Ok(response);
     }
@@ -247,33 +256,38 @@ public static class ReviewEndpoints
     private static async Task<IResult> UnlikeReviewAsync(
         Guid reviewId,
         ClaimsPrincipal principal,
-        AppDbContext dbContext,
+        IRepository<Review> reviewRepository,
+        IRepository<ReviewLike> reviewLikeRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
         var userId = GetUserId(principal);
-        var like = await dbContext.ReviewLikes
+        var like = await reviewLikeRepository.Query()
             .FirstOrDefaultAsync(candidate => candidate.ReviewId == reviewId && candidate.UserId == userId, cancellationToken);
 
         if (like is null)
         {
-            return Results.NoContent();
+            var current = await LoadReviewResponseAsync(reviewRepository, reviewId, userId, cancellationToken);
+            return Results.Ok(current);
         }
 
-        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
-        dbContext.ReviewLikes.Remove(like);
-        await dbContext.SaveChangesAsync(cancellationToken);
-        await RecalculateReviewLikesAsync(dbContext, reviewId, cancellationToken);
+        await using var transaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
+        reviewLikeRepository.Remove(like);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+        await RecalculateReviewLikesAsync(reviewRepository, reviewLikeRepository, unitOfWork, reviewId, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
-        return Results.NoContent();
+        var response = await LoadReviewResponseAsync(reviewRepository, reviewId, userId, cancellationToken);
+        return Results.Ok(response);
     }
 
     private static async Task<IResult> GetReviewCommentsAsync(
         Guid reviewId,
-        AppDbContext dbContext,
+        IRepository<Review> reviewRepository,
+        IRepository<Comment> commentRepository,
         CancellationToken cancellationToken)
     {
-        var reviewExists = await dbContext.Reviews
+        var reviewExists = await reviewRepository.Query()
             .AsNoTracking()
             .AnyAsync(review =>
                 review.Id == reviewId
@@ -286,7 +300,7 @@ public static class ReviewEndpoints
             return Results.NotFound(new { Message = "Review was not found." });
         }
 
-        var comments = await dbContext.Comments
+        var comments = await commentRepository.Query()
             .AsNoTracking()
             .Include(comment => comment.User)
             .Where(comment => comment.ReviewId == reviewId && !comment.IsDeleted)
@@ -301,7 +315,9 @@ public static class ReviewEndpoints
         Guid reviewId,
         CommentCreateRequest request,
         ClaimsPrincipal principal,
-        AppDbContext dbContext,
+        IRepository<Review> reviewRepository,
+        IRepository<Comment> commentRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
         var validation = ValidateComment(request.Content);
@@ -310,7 +326,7 @@ public static class ReviewEndpoints
             return Results.BadRequest(new { Message = validation });
         }
 
-        var reviewExists = await dbContext.Reviews
+        var reviewExists = await reviewRepository.Query()
             .AnyAsync(review =>
                 review.Id == reviewId
                 && !review.IsDeleted
@@ -331,10 +347,10 @@ public static class ReviewEndpoints
             CreatedAt = DateTimeOffset.UtcNow
         };
 
-        dbContext.Comments.Add(comment);
-        await dbContext.SaveChangesAsync(cancellationToken);
+        commentRepository.Add(comment);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        var response = await dbContext.Comments
+        var response = await commentRepository.Query()
             .AsNoTracking()
             .Include(candidate => candidate.User)
             .Where(candidate => candidate.Id == comment.Id)
@@ -347,12 +363,13 @@ public static class ReviewEndpoints
     private static async Task<IResult> DeleteCommentAsync(
         Guid commentId,
         ClaimsPrincipal principal,
-        AppDbContext dbContext,
+        IRepository<Comment> commentRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
         var userId = GetUserId(principal);
         var isAdmin = IsAdmin(principal);
-        var comment = await dbContext.Comments.FirstOrDefaultAsync(candidate => candidate.Id == commentId, cancellationToken);
+        var comment = await commentRepository.Query().FirstOrDefaultAsync(candidate => candidate.Id == commentId, cancellationToken);
 
         if (comment is null || comment.IsDeleted)
         {
@@ -366,19 +383,20 @@ public static class ReviewEndpoints
 
         comment.IsDeleted = true;
         comment.UpdatedAt = DateTimeOffset.UtcNow;
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Results.NoContent();
     }
 
     private static async Task<IResult> GetAdminReviewsAsync(
-        AppDbContext dbContext,
+        IRepository<Review> reviewRepository,
         ReviewStatus? status,
         CancellationToken cancellationToken)
     {
-        var query = dbContext.Reviews
+        var query = reviewRepository.Query()
             .AsNoTracking()
             .Include(review => review.User)
+            .Include(review => review.Likes)
             .Where(review => !review.IsDeleted);
 
         if (status is not null)
@@ -389,7 +407,7 @@ public static class ReviewEndpoints
         var reviews = await query
             .OrderBy(review => review.Status)
             .ThenByDescending(review => review.CreatedAt)
-            .Select(review => ToResponse(review))
+            .Select(review => ToResponse(review, currentUserId: null))
             .ToListAsync(cancellationToken);
 
         return Results.Ok(reviews);
@@ -397,29 +415,22 @@ public static class ReviewEndpoints
 
     private static Task<IResult> ApproveReviewAsync(
         Guid reviewId,
-        AppDbContext dbContext,
+        IRepository<Review> reviewRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
-        return SetReviewStatusAsync(reviewId, ReviewStatus.Approved, null, dbContext, cancellationToken);
-    }
-
-    private static Task<IResult> RejectReviewAsync(
-        Guid reviewId,
-        ReviewModerationRequest request,
-        AppDbContext dbContext,
-        CancellationToken cancellationToken)
-    {
-        return SetReviewStatusAsync(reviewId, ReviewStatus.Rejected, TrimOrNull(request.RejectionReason), dbContext, cancellationToken);
+        return SetReviewStatusAsync(reviewId, ReviewStatus.Approved, null, reviewRepository, unitOfWork, cancellationToken);
     }
 
     private static async Task<IResult> SetReviewStatusAsync(
         Guid reviewId,
         ReviewStatus status,
         string? rejectionReason,
-        AppDbContext dbContext,
+        IRepository<Review> reviewRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
-        var review = await dbContext.Reviews.FirstOrDefaultAsync(candidate => candidate.Id == reviewId, cancellationToken);
+        var review = await reviewRepository.Query().FirstOrDefaultAsync(candidate => candidate.Id == reviewId, cancellationToken);
 
         if (review is null || review.IsDeleted)
         {
@@ -430,23 +441,25 @@ public static class ReviewEndpoints
         review.RejectionReason = status == ReviewStatus.Rejected ? rejectionReason : null;
         review.UpdatedAt = DateTimeOffset.UtcNow;
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        var response = await LoadReviewResponseAsync(dbContext, review.Id, cancellationToken);
+        var response = await LoadReviewResponseAsync(reviewRepository, review.Id, null, cancellationToken);
 
         return Results.Ok(response);
     }
 
     private static async Task<ReviewResponse> LoadReviewResponseAsync(
-        AppDbContext dbContext,
+        IRepository<Review> reviewRepository,
         Guid reviewId,
+        Guid? currentUserId,
         CancellationToken cancellationToken)
     {
-        return await dbContext.Reviews
+        return await reviewRepository.Query()
             .AsNoTracking()
             .Include(review => review.User)
+            .Include(review => review.Likes)
             .Where(review => review.Id == reviewId)
-            .Select(review => ToResponse(review))
+            .Select(review => ToResponse(review, currentUserId))
             .FirstAsync(cancellationToken);
     }
 
@@ -474,17 +487,28 @@ public static class ReviewEndpoints
         return null;
     }
 
-    private static async Task RecalculateReviewLikesAsync(AppDbContext dbContext, Guid reviewId, CancellationToken cancellationToken)
+    private static async Task RecalculateReviewLikesAsync(
+        IRepository<Review> reviewRepository,
+        IRepository<ReviewLike> reviewLikeRepository,
+        IUnitOfWork unitOfWork,
+        Guid reviewId,
+        CancellationToken cancellationToken)
     {
-        var review = await dbContext.Reviews.FirstAsync(candidate => candidate.Id == reviewId, cancellationToken);
-        review.LikesCount = await dbContext.ReviewLikes.CountAsync(like => like.ReviewId == reviewId, cancellationToken);
+        var review = await reviewRepository.Query().FirstAsync(candidate => candidate.Id == reviewId, cancellationToken);
+        review.LikesCount = await reviewLikeRepository.Query().CountAsync(like => like.ReviewId == reviewId, cancellationToken);
         review.UpdatedAt = DateTimeOffset.UtcNow;
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
     }
 
     private static Guid GetUserId(ClaimsPrincipal principal)
     {
         return Guid.Parse(principal.FindFirstValue(ClaimTypes.NameIdentifier)!);
+    }
+
+    private static Guid? TryGetUserId(ClaimsPrincipal principal)
+    {
+        var value = principal.FindFirstValue(ClaimTypes.NameIdentifier);
+        return Guid.TryParse(value, out var userId) ? userId : null;
     }
 
     private static bool IsAdmin(ClaimsPrincipal principal)
@@ -497,7 +521,7 @@ public static class ReviewEndpoints
         return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     }
 
-    private static ReviewResponse ToResponse(Review review)
+    private static ReviewResponse ToResponse(Review review, Guid? currentUserId)
     {
         return new ReviewResponse(
             review.Id,
@@ -509,6 +533,7 @@ public static class ReviewEndpoints
             review.Status,
             review.RejectionReason,
             review.LikesCount,
+            currentUserId is not null && review.Likes.Any(like => like.UserId == currentUserId),
             review.CreatedAt,
             review.UpdatedAt);
     }
@@ -530,8 +555,6 @@ public sealed record ReviewCreateRequest(Guid MovieId, string Content, bool IsSp
 
 public sealed record ReviewUpdateRequest(string Content, bool IsSpoiler);
 
-public sealed record ReviewModerationRequest(string? RejectionReason);
-
 public sealed record CommentCreateRequest(string Content);
 
 public sealed record ReviewResponse(
@@ -544,6 +567,7 @@ public sealed record ReviewResponse(
     ReviewStatus Status,
     string? RejectionReason,
     int LikesCount,
+    bool IsLikedByCurrentUser,
     DateTimeOffset CreatedAt,
     DateTimeOffset? UpdatedAt);
 

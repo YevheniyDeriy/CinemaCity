@@ -1,0 +1,7 @@
+{
+  "source": "unchanged working-tree monolith",
+  "method": "POST",
+  "path": "/api/ratings",
+  "status": 401,
+  "body": ""
+}

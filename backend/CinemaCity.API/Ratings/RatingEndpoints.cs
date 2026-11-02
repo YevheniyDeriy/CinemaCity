@@ -1,7 +1,7 @@
 using System.Security.Claims;
+using CinemaCity.Application.Persistence;
 using CinemaCity.Domain.Entities;
 using CinemaCity.Domain.Enums;
-using CinemaCity.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
 namespace CinemaCity.API.Ratings;
@@ -29,7 +29,11 @@ public static class RatingEndpoints
     private static async Task<IResult> CreateRatingAsync(
         RatingCreateRequest request,
         ClaimsPrincipal principal,
-        AppDbContext dbContext,
+        IRepository<Movie> movieRepository,
+        IRepository<Episode> episodeRepository,
+        IRepository<Rating> ratingRepository,
+        IRepository<WatchlistItem> watchlistRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
         var validation = ValidateTarget(request.MovieId, request.EpisodeId, request.Score);
@@ -39,11 +43,11 @@ public static class RatingEndpoints
         }
 
         var userId = GetUserId(principal);
-        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        await using var transaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
 
         if (request.MovieId is Guid movieId)
         {
-            var movieExists = await dbContext.Movies
+            var movieExists = await movieRepository.Query()
                 .AnyAsync(movie => movie.Id == movieId && !movie.IsDeleted, cancellationToken);
 
             if (!movieExists)
@@ -51,7 +55,7 @@ public static class RatingEndpoints
                 return Results.NotFound(new { Message = "Movie was not found." });
             }
 
-            var duplicate = await dbContext.Ratings
+            var duplicate = await ratingRepository.Query()
                 .AnyAsync(rating => rating.UserId == userId && rating.MovieId == movieId, cancellationToken);
 
             if (duplicate)
@@ -61,14 +65,14 @@ public static class RatingEndpoints
         }
         else if (request.EpisodeId is Guid episodeId)
         {
-            var episodeExists = await dbContext.Episodes.AnyAsync(episode => episode.Id == episodeId, cancellationToken);
+            var episodeExists = await episodeRepository.Query().AnyAsync(episode => episode.Id == episodeId, cancellationToken);
 
             if (!episodeExists)
             {
                 return Results.NotFound(new { Message = "Episode was not found." });
             }
 
-            var duplicate = await dbContext.Ratings
+            var duplicate = await ratingRepository.Query()
                 .AnyAsync(rating => rating.UserId == userId && rating.EpisodeId == episodeId, cancellationToken);
 
             if (duplicate)
@@ -87,9 +91,11 @@ public static class RatingEndpoints
             CreatedAt = DateTimeOffset.UtcNow
         };
 
-        dbContext.Ratings.Add(rating);
-        await dbContext.SaveChangesAsync(cancellationToken);
-        await RecalculateTargetRatingAsync(dbContext, rating.MovieId, rating.EpisodeId, cancellationToken);
+        ratingRepository.Add(rating);
+        await ApplyTargetRatingChangeAsync(movieRepository, episodeRepository, unitOfWork, rating.MovieId, rating.EpisodeId, null, rating.Score, cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+        var watchedMovieId = await ResolveWatchedMovieIdAsync(episodeRepository, rating.MovieId, rating.EpisodeId, cancellationToken);
+        await MarkMovieWatchedAsync(watchlistRepository, unitOfWork, userId, watchedMovieId, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
         return Results.Created($"/api/ratings/{rating.Id}", ToResponse(rating));
@@ -99,7 +105,11 @@ public static class RatingEndpoints
         Guid ratingId,
         RatingUpdateRequest request,
         ClaimsPrincipal principal,
-        AppDbContext dbContext,
+        IRepository<Movie> movieRepository,
+        IRepository<Episode> episodeRepository,
+        IRepository<Rating> ratingRepository,
+        IRepository<WatchlistItem> watchlistRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
         if (request.Score is < 1 or > 10)
@@ -109,7 +119,7 @@ public static class RatingEndpoints
 
         var userId = GetUserId(principal);
         var isAdmin = IsAdmin(principal);
-        var rating = await dbContext.Ratings.FirstOrDefaultAsync(candidate => candidate.Id == ratingId, cancellationToken);
+        var rating = await ratingRepository.Query().FirstOrDefaultAsync(candidate => candidate.Id == ratingId, cancellationToken);
 
         if (rating is null)
         {
@@ -121,13 +131,16 @@ public static class RatingEndpoints
             return Results.Forbid();
         }
 
-        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        await using var transaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
 
+        var previousScore = rating.Score;
         rating.Score = request.Score;
         rating.UpdatedAt = DateTimeOffset.UtcNow;
 
-        await dbContext.SaveChangesAsync(cancellationToken);
-        await RecalculateTargetRatingAsync(dbContext, rating.MovieId, rating.EpisodeId, cancellationToken);
+        await ApplyTargetRatingChangeAsync(movieRepository, episodeRepository, unitOfWork, rating.MovieId, rating.EpisodeId, previousScore, rating.Score, cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+        var watchedMovieId = await ResolveWatchedMovieIdAsync(episodeRepository, rating.MovieId, rating.EpisodeId, cancellationToken);
+        await MarkMovieWatchedAsync(watchlistRepository, unitOfWork, rating.UserId, watchedMovieId, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
         return Results.Ok(ToResponse(rating));
@@ -136,12 +149,15 @@ public static class RatingEndpoints
     private static async Task<IResult> DeleteRatingAsync(
         Guid ratingId,
         ClaimsPrincipal principal,
-        AppDbContext dbContext,
+        IRepository<Movie> movieRepository,
+        IRepository<Episode> episodeRepository,
+        IRepository<Rating> ratingRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
         var userId = GetUserId(principal);
         var isAdmin = IsAdmin(principal);
-        var rating = await dbContext.Ratings.FirstOrDefaultAsync(candidate => candidate.Id == ratingId, cancellationToken);
+        var rating = await ratingRepository.Query().FirstOrDefaultAsync(candidate => candidate.Id == ratingId, cancellationToken);
 
         if (rating is null)
         {
@@ -155,58 +171,138 @@ public static class RatingEndpoints
 
         var movieId = rating.MovieId;
         var episodeId = rating.EpisodeId;
+        var previousScore = rating.Score;
 
-        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        await using var transaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
 
-        dbContext.Ratings.Remove(rating);
-        await dbContext.SaveChangesAsync(cancellationToken);
-        await RecalculateTargetRatingAsync(dbContext, movieId, episodeId, cancellationToken);
+        ratingRepository.Remove(rating);
+        await ApplyTargetRatingChangeAsync(movieRepository, episodeRepository, unitOfWork, movieId, episodeId, previousScore, null, cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
         return Results.NoContent();
     }
 
-    private static async Task RecalculateTargetRatingAsync(
-        AppDbContext dbContext,
+    private static async Task ApplyTargetRatingChangeAsync(
+        IRepository<Movie> movieRepository,
+        IRepository<Episode> episodeRepository,
+        IUnitOfWork unitOfWork,
         Guid? movieId,
         Guid? episodeId,
+        decimal? oldScore,
+        decimal? newScore,
         CancellationToken cancellationToken)
     {
         if (movieId is Guid actualMovieId)
         {
-            var movie = await dbContext.Movies.FirstAsync(candidate => candidate.Id == actualMovieId, cancellationToken);
-            var stats = await dbContext.Ratings
-                .Where(rating => rating.MovieId == actualMovieId)
-                .GroupBy(_ => 1)
-                .Select(group => new
-                {
-                    Count = group.Count(),
-                    Average = group.Average(rating => rating.Score)
-                })
-                .FirstOrDefaultAsync(cancellationToken);
-
-            movie.RatingsCount = stats?.Count ?? 0;
-            movie.AverageRating = stats is null ? 0 : Math.Round(stats.Average, 1);
+            var movie = await movieRepository.Query().FirstAsync(candidate => candidate.Id == actualMovieId, cancellationToken);
+            ApplyRatingChange(movie, oldScore, newScore);
             movie.UpdatedAt = DateTimeOffset.UtcNow;
         }
         else if (episodeId is Guid actualEpisodeId)
         {
-            var episode = await dbContext.Episodes.FirstAsync(candidate => candidate.Id == actualEpisodeId, cancellationToken);
-            var stats = await dbContext.Ratings
-                .Where(rating => rating.EpisodeId == actualEpisodeId)
-                .GroupBy(_ => 1)
-                .Select(group => new
-                {
-                    Count = group.Count(),
-                    Average = group.Average(rating => rating.Score)
-                })
-                .FirstOrDefaultAsync(cancellationToken);
-
-            episode.RatingsCount = stats?.Count ?? 0;
-            episode.AverageRating = stats is null ? 0 : Math.Round(stats.Average, 1);
+            var episode = await episodeRepository.Query().FirstAsync(candidate => candidate.Id == actualEpisodeId, cancellationToken);
+            ApplyRatingChange(episode, oldScore, newScore);
         }
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+    }
+
+    private static void ApplyRatingChange(Movie movie, decimal? oldScore, decimal? newScore)
+    {
+        var stats = ApplyRatingChange(movie.AverageRating, movie.RatingsCount, oldScore, newScore);
+        movie.AverageRating = stats.AverageRating;
+        movie.RatingsCount = stats.RatingsCount;
+    }
+
+    private static void ApplyRatingChange(Episode episode, decimal? oldScore, decimal? newScore)
+    {
+        var stats = ApplyRatingChange(episode.AverageRating, episode.RatingsCount, oldScore, newScore);
+        episode.AverageRating = stats.AverageRating;
+        episode.RatingsCount = stats.RatingsCount;
+    }
+
+    private static RatingStats ApplyRatingChange(decimal currentAverage, int currentCount, decimal? oldScore, decimal? newScore)
+    {
+        var count = Math.Max(0, currentCount);
+        var total = currentAverage * count;
+
+        if (oldScore is not null && count > 0)
+        {
+            total -= oldScore.Value;
+            count--;
+        }
+
+        if (newScore is not null)
+        {
+            total += newScore.Value;
+            count++;
+        }
+
+        if (count == 0)
+        {
+            return new RatingStats(0, 0);
+        }
+
+        return new RatingStats(Math.Round(total / count, 1), count);
+    }
+
+    private static async Task MarkMovieWatchedAsync(
+        IRepository<WatchlistItem> watchlistRepository,
+        IUnitOfWork unitOfWork,
+        Guid userId,
+        Guid? movieId,
+        CancellationToken cancellationToken)
+    {
+        if (movieId is null)
+        {
+            return;
+        }
+
+        var item = await watchlistRepository.Query()
+            .FirstOrDefaultAsync(candidate => candidate.UserId == userId && candidate.MovieId == movieId, cancellationToken);
+
+        if (item is null)
+        {
+            watchlistRepository.Add(new WatchlistItem
+            {
+                Id = Guid.NewGuid(),
+                UserId = userId,
+                MovieId = movieId.Value,
+                Status = WatchlistStatus.Watched,
+                AddedAt = DateTimeOffset.UtcNow
+            });
+        }
+        else
+        {
+            item.Status = WatchlistStatus.Watched;
+            item.UpdatedAt = DateTimeOffset.UtcNow;
+        }
+
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+    }
+
+    private static async Task<Guid?> ResolveWatchedMovieIdAsync(
+        IRepository<Episode> episodeRepository,
+        Guid? movieId,
+        Guid? episodeId,
+        CancellationToken cancellationToken)
+    {
+        if (movieId is not null)
+        {
+            return movieId;
+        }
+
+        if (episodeId is null)
+        {
+            return null;
+        }
+
+        return await episodeRepository.Query()
+            .AsNoTracking()
+            .Where(episode => episode.Id == episodeId)
+            .Select(episode => (Guid?)episode.Season.SeriesId)
+            .FirstOrDefaultAsync(cancellationToken);
     }
 
     private static string? ValidateTarget(Guid? movieId, Guid? episodeId, decimal score)
@@ -249,6 +345,8 @@ public static class RatingEndpoints
 public sealed record RatingCreateRequest(Guid? MovieId, Guid? EpisodeId, decimal Score);
 
 public sealed record RatingUpdateRequest(decimal Score);
+
+public sealed record RatingStats(decimal AverageRating, int RatingsCount);
 
 public sealed record RatingResponse(
     Guid Id,

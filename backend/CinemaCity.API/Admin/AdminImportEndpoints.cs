@@ -62,6 +62,6 @@ public static partial class AdminEndpoints
 
     private static string? ValidatePages(int pages)
     {
-        return pages is < 1 or > 10 ? "Pages must be between 1 and 10." : null;
+        return pages < 1 ? "Pages must be greater than zero." : null;
     }
 }

@@ -23,6 +23,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<WatchlistItem> WatchlistItems => Set<WatchlistItem>();
     public DbSet<UserMovieList> UserMovieLists => Set<UserMovieList>();
     public DbSet<UserMovieListItem> UserMovieListItems => Set<UserMovieListItem>();
+    public DbSet<CatalogStatisticsMessage> CatalogStatisticsMessages => Set<CatalogStatisticsMessage>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -37,6 +38,19 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         ConfigureReviews(modelBuilder);
         ConfigureWatchlist(modelBuilder);
         ConfigureUserMovieLists(modelBuilder);
+        // Local read models populated exclusively through owner APIs after extraction.
+        // Original data is archived by the transition migration; these are not service databases.
+        var projections = new HashSet<Type> { typeof(User), typeof(RefreshToken), typeof(Movie), typeof(Genre), typeof(Country), typeof(Language), typeof(Person), typeof(MovieCast), typeof(Season), typeof(Episode) };
+        foreach (var entity in modelBuilder.Model.GetEntityTypes())
+            if (projections.Contains(entity.ClrType) || entity.Name is "movie_genres" or "movie_countries" or "movie_languages") entity.SetSchema("projections");
+        modelBuilder.Entity<CatalogStatisticsMessage>(entity =>
+        {
+            entity.ToTable("catalog_statistics_outbox");
+            entity.HasKey(message => message.Id);
+            entity.Property(message => message.Kind).HasMaxLength(20);
+            entity.Property(message => message.AverageRating).HasPrecision(3, 1);
+            entity.HasIndex(message => new { message.SentAt, message.NextAttemptAt });
+        });
     }
 
     private static void ConfigureUsers(ModelBuilder modelBuilder)
@@ -52,7 +66,6 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             entity.Property(user => user.GoogleId).HasColumnName("google_id").HasMaxLength(255);
             entity.Property(user => user.AvatarUrl).HasColumnName("avatar_url");
             entity.Property(user => user.Role).HasColumnName("role").HasConversion<string>().HasMaxLength(32).IsRequired();
-            entity.Property(user => user.IsEmailConfirmed).HasColumnName("is_email_confirmed");
             entity.Property(user => user.FailedLoginAttempts).HasColumnName("failed_login_attempts");
             entity.Property(user => user.LockoutEndAt).HasColumnName("lockout_end_at");
             entity.Property(user => user.CreatedAt).HasColumnName("created_at");
@@ -235,7 +248,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             entity.Property(episode => episode.SeasonId).HasColumnName("season_id");
             entity.Property(episode => episode.EpisodeNumber).HasColumnName("episode_number");
             entity.Property(episode => episode.Title).HasColumnName("title").HasMaxLength(255).IsRequired();
-            entity.Property(episode => episode.Description).HasColumnName("description").HasMaxLength(800);
+            entity.Property(episode => episode.Description).HasColumnName("description");
             entity.Property(episode => episode.AirDate).HasColumnName("air_date");
             entity.Property(episode => episode.Duration).HasColumnName("duration");
             entity.Property(episode => episode.AverageRating).HasColumnName("average_rating").HasPrecision(3, 1);

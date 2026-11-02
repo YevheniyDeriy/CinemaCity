@@ -29,36 +29,6 @@ public sealed class TokenService(IOptions<JwtOptions> jwtOptions)
         return (WriteJwt(claims, expiresAt), expiresAt);
     }
 
-    public (string Token, DateTimeOffset ExpiresAt) CreateEmailConfirmationToken(User user)
-    {
-        var expiresAt = DateTimeOffset.UtcNow.AddHours(_jwtOptions.EmailConfirmationTokenHours);
-        var claims = new List<Claim>
-        {
-            new(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
-            new(JwtRegisteredClaimNames.Email, user.Email),
-            new("purpose", "email-confirmation")
-        };
-
-        return (WriteJwt(claims, expiresAt), expiresAt);
-    }
-
-    public ClaimsPrincipal? ValidateToken(string token, bool validateLifetime = true)
-    {
-        var parameters = CreateTokenValidationParameters();
-        parameters.ValidateLifetime = validateLifetime;
-
-        var handler = new JwtSecurityTokenHandler();
-
-        try
-        {
-            return handler.ValidateToken(token, parameters, out _);
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
     public static string CreateRefreshToken()
     {
         return Convert.ToBase64String(RandomNumberGenerator.GetBytes(64));
@@ -68,21 +38,6 @@ public sealed class TokenService(IOptions<JwtOptions> jwtOptions)
     {
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(refreshToken));
         return Convert.ToHexString(hash);
-    }
-
-    public TokenValidationParameters CreateTokenValidationParameters()
-    {
-        return new TokenValidationParameters
-        {
-            ValidateIssuer = true,
-            ValidateAudience = true,
-            ValidateLifetime = true,
-            ValidateIssuerSigningKey = true,
-            ValidIssuer = _jwtOptions.Issuer,
-            ValidAudience = _jwtOptions.Audience,
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_jwtOptions.Secret)),
-            ClockSkew = TimeSpan.FromSeconds(30)
-        };
     }
 
     private string WriteJwt(IEnumerable<Claim> claims, DateTimeOffset expiresAt)

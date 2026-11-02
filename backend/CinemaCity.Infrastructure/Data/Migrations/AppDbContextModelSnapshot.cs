@@ -22,6 +22,48 @@ namespace CinemaCity.Infrastructure.Data.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("CinemaCity.Domain.Entities.CatalogStatisticsMessage", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("AverageRating")
+                        .HasPrecision(3, 1)
+                        .HasColumnType("numeric(3,1)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<DateTimeOffset?>("NextAttemptAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("RatingsCount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset?>("SentAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("TargetId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SentAt", "NextAttemptAt");
+
+                    b.ToTable("catalog_statistics_outbox", (string)null);
+                });
+
             modelBuilder.Entity("CinemaCity.Domain.Entities.Comment", b =>
                 {
                     b.Property<Guid>("Id")
@@ -91,7 +133,7 @@ namespace CinemaCity.Infrastructure.Data.Migrations
                     b.HasIndex("Name")
                         .IsUnique();
 
-                    b.ToTable("countries", (string)null);
+                    b.ToTable("countries", "projections");
                 });
 
             modelBuilder.Entity("CinemaCity.Domain.Entities.Episode", b =>
@@ -111,8 +153,7 @@ namespace CinemaCity.Infrastructure.Data.Migrations
                         .HasColumnName("average_rating");
 
                     b.Property<string>("Description")
-                        .HasMaxLength(800)
-                        .HasColumnType("character varying(800)")
+                        .HasColumnType("text")
                         .HasColumnName("description");
 
                     b.Property<int?>("Duration")
@@ -142,7 +183,7 @@ namespace CinemaCity.Infrastructure.Data.Migrations
                     b.HasIndex("SeasonId", "EpisodeNumber")
                         .IsUnique();
 
-                    b.ToTable("episodes", (string)null);
+                    b.ToTable("episodes", "projections");
                 });
 
             modelBuilder.Entity("CinemaCity.Domain.Entities.Genre", b =>
@@ -182,7 +223,7 @@ namespace CinemaCity.Infrastructure.Data.Migrations
                         .IsUnique()
                         .HasFilter("tmdb_id > 0");
 
-                    b.ToTable("genres", (string)null);
+                    b.ToTable("genres", "projections");
                 });
 
             modelBuilder.Entity("CinemaCity.Domain.Entities.Language", b =>
@@ -213,7 +254,7 @@ namespace CinemaCity.Infrastructure.Data.Migrations
                     b.HasIndex("Name")
                         .IsUnique();
 
-                    b.ToTable("languages", (string)null);
+                    b.ToTable("languages", "projections");
                 });
 
             modelBuilder.Entity("CinemaCity.Domain.Entities.Movie", b =>
@@ -334,7 +375,7 @@ namespace CinemaCity.Infrastructure.Data.Migrations
                         .IsUnique()
                         .HasFilter("tmdb_id > 0");
 
-                    b.ToTable("movies", (string)null);
+                    b.ToTable("movies", "projections");
                 });
 
             modelBuilder.Entity("CinemaCity.Domain.Entities.MovieCast", b =>
@@ -373,7 +414,7 @@ namespace CinemaCity.Infrastructure.Data.Migrations
 
                     b.HasIndex("PersonId");
 
-                    b.ToTable("movie_cast", (string)null);
+                    b.ToTable("movie_cast", "projections");
                 });
 
             modelBuilder.Entity("CinemaCity.Domain.Entities.Person", b =>
@@ -426,7 +467,7 @@ namespace CinemaCity.Infrastructure.Data.Migrations
                         .IsUnique()
                         .HasFilter("tmdb_id > 0");
 
-                    b.ToTable("persons", (string)null);
+                    b.ToTable("persons", "projections");
                 });
 
             modelBuilder.Entity("CinemaCity.Domain.Entities.Rating", b =>
@@ -518,7 +559,7 @@ namespace CinemaCity.Infrastructure.Data.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("refresh_tokens", (string)null);
+                    b.ToTable("refresh_tokens", "projections");
                 });
 
             modelBuilder.Entity("CinemaCity.Domain.Entities.Review", b =>
@@ -641,7 +682,7 @@ namespace CinemaCity.Infrastructure.Data.Migrations
                     b.HasIndex("SeriesId", "SeasonNumber")
                         .IsUnique();
 
-                    b.ToTable("seasons", (string)null);
+                    b.ToTable("seasons", "projections");
                 });
 
             modelBuilder.Entity("CinemaCity.Domain.Entities.User", b =>
@@ -673,10 +714,6 @@ namespace CinemaCity.Infrastructure.Data.Migrations
                         .HasMaxLength(255)
                         .HasColumnType("character varying(255)")
                         .HasColumnName("google_id");
-
-                    b.Property<bool>("IsEmailConfirmed")
-                        .HasColumnType("boolean")
-                        .HasColumnName("is_email_confirmed");
 
                     b.Property<DateTimeOffset?>("LockoutEndAt")
                         .HasColumnType("timestamp with time zone")
@@ -713,7 +750,7 @@ namespace CinemaCity.Infrastructure.Data.Migrations
                     b.HasIndex("Username")
                         .IsUnique();
 
-                    b.ToTable("users", (string)null);
+                    b.ToTable("users", "projections");
                 });
 
             modelBuilder.Entity("CinemaCity.Domain.Entities.UserMovieList", b =>
@@ -840,7 +877,7 @@ namespace CinemaCity.Infrastructure.Data.Migrations
 
                     b.HasIndex("country_id");
 
-                    b.ToTable("movie_countries");
+                    b.ToTable("movie_countries", "projections");
                 });
 
             modelBuilder.Entity("movie_genres", b =>
@@ -855,7 +892,7 @@ namespace CinemaCity.Infrastructure.Data.Migrations
 
                     b.HasIndex("genre_id");
 
-                    b.ToTable("movie_genres");
+                    b.ToTable("movie_genres", "projections");
                 });
 
             modelBuilder.Entity("movie_languages", b =>
@@ -870,7 +907,7 @@ namespace CinemaCity.Infrastructure.Data.Migrations
 
                     b.HasIndex("language_id");
 
-                    b.ToTable("movie_languages");
+                    b.ToTable("movie_languages", "projections");
                 });
 
             modelBuilder.Entity("CinemaCity.Domain.Entities.Comment", b =>

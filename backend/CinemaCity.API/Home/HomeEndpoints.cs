@@ -1,7 +1,7 @@
 using System.Security.Claims;
+using CinemaCity.Application.Persistence;
 using CinemaCity.Domain.Entities;
 using CinemaCity.Domain.Enums;
-using CinemaCity.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
 namespace CinemaCity.API.Home;
@@ -23,7 +23,10 @@ public static class HomeEndpoints
 
     private static async Task<IResult> GetRecommendationsAsync(
         ClaimsPrincipal principal,
-        AppDbContext dbContext,
+        IRepository<Movie> movieRepository,
+        IRepository<WatchlistItem> watchlistRepository,
+        IRepository<Rating> ratingRepository,
+        IRepository<MovieCast> movieCastRepository,
         int limit = 10,
         CancellationToken cancellationToken = default)
     {
@@ -32,11 +35,11 @@ public static class HomeEndpoints
 
         if (userId is null)
         {
-            var fallback = await GetFallbackRecommendationsAsync(dbContext, normalizedLimit, cancellationToken);
+            var fallback = await GetFallbackRecommendationsAsync(movieRepository, normalizedLimit, cancellationToken);
             return Results.Ok(new HomeRailResponse("top-rated", fallback));
         }
 
-        var watchedMovieIds = await dbContext.WatchlistItems
+        var watchedMovieIds = await watchlistRepository.Query()
             .AsNoTracking()
             .Where(item => item.UserId == userId && item.Status == WatchlistStatus.Watched)
             .OrderByDescending(item => item.UpdatedAt ?? item.AddedAt)
@@ -44,7 +47,7 @@ public static class HomeEndpoints
             .Select(item => item.MovieId)
             .ToListAsync(cancellationToken);
 
-        var ratedMovieIds = await dbContext.Ratings
+        var ratedMovieIds = await ratingRepository.Query()
             .AsNoTracking()
             .Where(rating => rating.UserId == userId && rating.MovieId != null)
             .OrderByDescending(rating => rating.UpdatedAt ?? rating.CreatedAt)
@@ -60,11 +63,11 @@ public static class HomeEndpoints
 
         if (seedMovieIds.Length == 0)
         {
-            var fallback = await GetFallbackRecommendationsAsync(dbContext, normalizedLimit, cancellationToken);
+            var fallback = await GetFallbackRecommendationsAsync(movieRepository, normalizedLimit, cancellationToken);
             return Results.Ok(new HomeRailResponse("top-rated", fallback));
         }
 
-        var genreIds = await dbContext.Movies
+        var genreIds = await movieRepository.Query()
             .AsNoTracking()
             .Where(movie => seedMovieIds.Contains(movie.Id))
             .SelectMany(movie => movie.Genres.Select(genre => genre.Id))
@@ -74,7 +77,7 @@ public static class HomeEndpoints
             .Select(group => group.Key)
             .ToListAsync(cancellationToken);
 
-        var personIds = await dbContext.MovieCast
+        var personIds = await movieCastRepository.Query()
             .AsNoTracking()
             .Where(cast => seedMovieIds.Contains(cast.MovieId))
             .GroupBy(cast => cast.PersonId)
@@ -83,7 +86,7 @@ public static class HomeEndpoints
             .Select(group => group.Key)
             .ToListAsync(cancellationToken);
 
-        var candidateIds = await dbContext.Movies
+        var candidateIds = await movieRepository.Query()
             .AsNoTracking()
             .Where(movie => !movie.IsDeleted && !seedMovieIds.Contains(movie.Id))
             .Where(movie =>
@@ -105,7 +108,7 @@ public static class HomeEndpoints
             .Select(candidate => candidate.Id)
             .ToListAsync(cancellationToken);
 
-        var candidateMovies = await dbContext.Movies
+        var candidateMovies = await movieRepository.Query()
             .AsNoTracking()
             .Include(movie => movie.Genres)
             .Where(movie => candidateIds.Contains(movie.Id))
@@ -120,7 +123,7 @@ public static class HomeEndpoints
         if (candidates.Count < normalizedLimit)
         {
             var existingIds = candidates.Select(movie => movie.Id).Concat(seedMovieIds).ToArray();
-            var fallback = await dbContext.Movies
+            var fallback = await movieRepository.Query()
                 .AsNoTracking()
                 .Include(movie => movie.Genres)
                 .Where(movie => !movie.IsDeleted && !existingIds.Contains(movie.Id))
@@ -136,7 +139,8 @@ public static class HomeEndpoints
     }
 
     private static async Task<IResult> GetPopularNowAsync(
-        AppDbContext dbContext,
+        IRepository<Movie> movieRepository,
+        IRepository<Rating> ratingRepository,
         int days = 7,
         int limit = 10,
         CancellationToken cancellationToken = default)
@@ -145,7 +149,7 @@ public static class HomeEndpoints
         var normalizedLimit = Math.Clamp(limit, 1, 20);
         var since = DateTimeOffset.UtcNow.AddDays(-normalizedDays);
 
-        var popularIds = await dbContext.Ratings
+        var popularIds = await ratingRepository.Query()
             .AsNoTracking()
             .Where(rating => rating.MovieId != null && rating.CreatedAt >= since)
             .GroupBy(rating => rating.MovieId!.Value)
@@ -155,7 +159,7 @@ public static class HomeEndpoints
             .Select(group => group.Key)
             .ToListAsync(cancellationToken);
 
-        var movies = await dbContext.Movies
+        var movies = await movieRepository.Query()
             .AsNoTracking()
             .Include(movie => movie.Genres)
             .Where(movie => popularIds.Contains(movie.Id) && !movie.IsDeleted)
@@ -170,7 +174,7 @@ public static class HomeEndpoints
         if (ordered.Count < normalizedLimit)
         {
             var existingIds = ordered.Select(movie => movie.Id).ToArray();
-            var fallbackMovies = await dbContext.Movies
+            var fallbackMovies = await movieRepository.Query()
                 .AsNoTracking()
                 .Include(movie => movie.Genres)
                 .Where(movie => !movie.IsDeleted && !existingIds.Contains(movie.Id))
@@ -186,11 +190,11 @@ public static class HomeEndpoints
     }
 
     private static async Task<IReadOnlyCollection<HomeMovieCardResponse>> GetFallbackRecommendationsAsync(
-        AppDbContext dbContext,
+        IRepository<Movie> movieRepository,
         int limit,
         CancellationToken cancellationToken)
     {
-        var movies = await dbContext.Movies
+        var movies = await movieRepository.Query()
             .AsNoTracking()
             .Include(movie => movie.Genres)
             .Where(movie => !movie.IsDeleted)

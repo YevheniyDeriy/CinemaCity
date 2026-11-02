@@ -1,0 +1,658 @@
+{
+  "Routes": [
+    {
+      "UpstreamPathTemplate": "/api/v1/auth/{everything}",
+      "DownstreamPathTemplate": "/api/v1/auth/{everything}",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5001
+        }
+      ],
+      "Priority": 100,
+      "Metadata": {
+        "Service": "Auth"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/auth/{everything}",
+      "DownstreamPathTemplate": "/api/v1/auth/{everything}",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5001
+        }
+      ],
+      "Priority": 100,
+      "Metadata": {
+        "Service": "Auth"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/v1/users",
+      "DownstreamPathTemplate": "/api/v1/users",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5001
+        }
+      ],
+      "Priority": 200,
+      "Metadata": {
+        "Service": "Auth"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/v1/users/me",
+      "DownstreamPathTemplate": "/api/v1/users/me",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5001
+        }
+      ],
+      "Priority": 200,
+      "Metadata": {
+        "Service": "Auth"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/v1/users/{id}/roles",
+      "DownstreamPathTemplate": "/api/v1/users/{id}/roles",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5001
+        }
+      ],
+      "Priority": 200,
+      "Metadata": {
+        "Service": "Auth"
+      },
+      "UpstreamHttpMethod": [
+        "Put"
+      ]
+    },
+    {
+      "UpstreamPathTemplate": "/api/users",
+      "DownstreamPathTemplate": "/api/v1/users",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5001
+        }
+      ],
+      "Priority": 200,
+      "Metadata": {
+        "Service": "Auth"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/users/me",
+      "DownstreamPathTemplate": "/api/v1/users/me",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5001
+        }
+      ],
+      "Priority": 200,
+      "Metadata": {
+        "Service": "Auth"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/users/{id}/roles",
+      "DownstreamPathTemplate": "/api/v1/users/{id}/roles",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5001
+        }
+      ],
+      "Priority": 200,
+      "Metadata": {
+        "Service": "Auth"
+      },
+      "UpstreamHttpMethod": [
+        "Put"
+      ]
+    },
+    {
+      "UpstreamPathTemplate": "/api/v1/catalog/{everything}",
+      "DownstreamPathTemplate": "/api/v1/catalog/{everything}",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 100,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/movies",
+      "DownstreamPathTemplate": "/api/v1/catalog/movies",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/movies/{everything}",
+      "DownstreamPathTemplate": "/api/v1/catalog/movies/{everything}",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/genres",
+      "DownstreamPathTemplate": "/api/v1/catalog/genres",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/search",
+      "DownstreamPathTemplate": "/api/v1/catalog/search",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/admin/movies",
+      "DownstreamPathTemplate": "/api/v1/admin/movies",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/admin/movies/{everything}",
+      "DownstreamPathTemplate": "/api/v1/admin/movies/{everything}",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/v1/admin/movies",
+      "DownstreamPathTemplate": "/api/v1/admin/movies",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/v1/admin/movies/{everything}",
+      "DownstreamPathTemplate": "/api/v1/admin/movies/{everything}",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/admin/genres",
+      "DownstreamPathTemplate": "/api/v1/admin/genres",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/admin/genres/{everything}",
+      "DownstreamPathTemplate": "/api/v1/admin/genres/{everything}",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/v1/admin/genres",
+      "DownstreamPathTemplate": "/api/v1/admin/genres",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/v1/admin/genres/{everything}",
+      "DownstreamPathTemplate": "/api/v1/admin/genres/{everything}",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/admin/persons",
+      "DownstreamPathTemplate": "/api/v1/admin/persons",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/admin/persons/{everything}",
+      "DownstreamPathTemplate": "/api/v1/admin/persons/{everything}",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/v1/admin/persons",
+      "DownstreamPathTemplate": "/api/v1/admin/persons",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/v1/admin/persons/{everything}",
+      "DownstreamPathTemplate": "/api/v1/admin/persons/{everything}",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/admin/uploads",
+      "DownstreamPathTemplate": "/api/v1/admin/uploads",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/admin/uploads/{everything}",
+      "DownstreamPathTemplate": "/api/v1/admin/uploads/{everything}",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/v1/admin/uploads",
+      "DownstreamPathTemplate": "/api/v1/admin/uploads",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/v1/admin/uploads/{everything}",
+      "DownstreamPathTemplate": "/api/v1/admin/uploads/{everything}",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/admin/seasons",
+      "DownstreamPathTemplate": "/api/v1/admin/seasons",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/admin/seasons/{everything}",
+      "DownstreamPathTemplate": "/api/v1/admin/seasons/{everything}",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/v1/admin/seasons",
+      "DownstreamPathTemplate": "/api/v1/admin/seasons",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/v1/admin/seasons/{everything}",
+      "DownstreamPathTemplate": "/api/v1/admin/seasons/{everything}",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/admin/episodes",
+      "DownstreamPathTemplate": "/api/v1/admin/episodes",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/admin/episodes/{everything}",
+      "DownstreamPathTemplate": "/api/v1/admin/episodes/{everything}",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/v1/admin/episodes",
+      "DownstreamPathTemplate": "/api/v1/admin/episodes",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/v1/admin/episodes/{everything}",
+      "DownstreamPathTemplate": "/api/v1/admin/episodes/{everything}",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/admin/import",
+      "DownstreamPathTemplate": "/api/v1/admin/import",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/admin/import/{everything}",
+      "DownstreamPathTemplate": "/api/v1/admin/import/{everything}",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/v1/admin/import",
+      "DownstreamPathTemplate": "/api/v1/admin/import",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/v1/admin/import/{everything}",
+      "DownstreamPathTemplate": "/api/v1/admin/import/{everything}",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 150,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/uploads/{everything}",
+      "DownstreamPathTemplate": "/uploads/{everything}",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5002
+        }
+      ],
+      "Priority": 100,
+      "Metadata": {
+        "Service": "Catalog"
+      }
+    },
+    {
+      "UpstreamPathTemplate": "/api/{everything}",
+      "DownstreamPathTemplate": "/api/{everything}",
+      "DownstreamScheme": "http",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 5100
+        }
+      ],
+      "Priority": 0,
+      "Metadata": {
+        "Service": "Community"
+      }
+    }
+  ],
+  "GlobalConfiguration": {
+    "BaseUrl": "http://localhost:5000"
+  }
+}

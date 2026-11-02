@@ -26,6 +26,7 @@
   <ItemGroup>
     <ProjectReference Include="..\CinemaCity.Application\CinemaCity.Application.csproj" />
     <ProjectReference Include="..\CinemaCity.Infrastructure\CinemaCity.Infrastructure.csproj" />
+    <ProjectReference Include="..\CinemaCity.ServiceDefaults\CinemaCity.ServiceDefaults.csproj" />
   </ItemGroup>
 
 </Project>

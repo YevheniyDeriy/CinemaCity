@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><IsPackable>false</IsPackable></PropertyGroup>
+  <ItemGroup><ProjectReference Include="../CinemaCity.CommunityService/CinemaCity.CommunityService.csproj" ReferenceOutputAssembly="false" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.7" />
+    <ProjectReference Include="../CinemaCity.Infrastructure/CinemaCity.Infrastructure.csproj" />
+    <ProjectReference Include="../CinemaCity.API/CinemaCity.API.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../CinemaCity.AuthService/CinemaCity.AuthService.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../CinemaCity.CatalogService/CinemaCity.CatalogService.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../CinemaCity.ApiGateway/CinemaCity.ApiGateway.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../../tools/CinemaCity.DataMigration/CinemaCity.DataMigration.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <ItemGroup><FrameworkReference Include="Microsoft.AspNetCore.App" /><Using Include="Xunit" /></ItemGroup>
+</Project>

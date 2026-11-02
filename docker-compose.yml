@@ -1,20 +1,132 @@
+name: cinemacity
+
+x-service-environment: &service-environment
+  ASPNETCORE_ENVIRONMENT: Development
+  Jwt__Issuer: CinemaCity
+  Jwt__Audience: CinemaCity.Client
+  Jwt__Secret: ${JWT_SECRET:?Run scripts/Initialize-Local.ps1 first}
+  Services__InternalKey: ${SERVICE_INTERNAL_KEY:?Run scripts/Initialize-Local.ps1 first}
+  Services__AuthUrl: http://auth:5001
+  Services__CatalogUrl: http://catalog:5002
+  Services__MonolithUrl: http://api:5100
+  Services__CommunityUrl: http://api:5003
+  Seed__Enabled: "false"
+
+x-service-build: &service-build
+  context: .
+  dockerfile: backend/Service.Dockerfile
+
 services:
   postgres:
     image: postgres:18
-    container_name: cinemacity-postgres
+    container_name: cinemacity-services-postgres
     environment:
       POSTGRES_DB: cinemacity
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run scripts/Initialize-Local.ps1 first}
+    ports: ["127.0.0.1:${POSTGRES_PORT:-5433}:5432"]
+    volumes: [services_postgres_data:/var/lib/postgresql]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d cinemacity"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build:
+      <<: *service-build
+      args: { PROJECT: CinemaCity.DataMigration, PROJECT_FOLDER: tools }
+    environment:
+      CINEMACITY_SOURCE_CONNECTION: ${CINEMACITY_DOCKER_SOURCE_CONNECTION:?Initialize using your existing CinemaCity database}
+      CINEMACITY_AUTH_CONNECTION: Host=postgres;Port=5432;Database=cinemacity_auth;Username=postgres;Password=${POSTGRES_PASSWORD}
+      CINEMACITY_CATALOG_CONNECTION: Host=postgres;Port=5432;Database=cinemacity_catalog;Username=postgres;Password=${POSTGRES_PASSWORD}
+      CINEMACITY_COMMUNITY_CONNECTION: Host=postgres;Port=5432;Database=cinemacity_community;Username=postgres;Password=${POSTGRES_PASSWORD}
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+
+  auth:
+    build:
+      <<: *service-build
+      args: { PROJECT: CinemaCity.AuthService }
+    environment:
+      <<: *service-environment
+      ASPNETCORE_URLS: http://+:5001
+      ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=cinemacity_auth;Username=postgres;Password=${POSTGRES_PASSWORD}
+      Google__ClientId: ${GOOGLE_CLIENT_ID:-}
+      Google__ClientSecret: ${GOOGLE_CLIENT_SECRET:-}
+      Google__CallbackPath: /api/v1/auth/google/signin
+    expose: ["5001"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  catalog:
+    build:
+      <<: *service-build
+      args: { PROJECT: CinemaCity.CatalogService }
+    environment:
+      <<: *service-environment
+      ASPNETCORE_URLS: http://+:5002
+      ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=cinemacity_catalog;Username=postgres;Password=${POSTGRES_PASSWORD}
+      Tmdb__ApiToken: ${TMDB_API_TOKEN:-}
+    expose: ["5002"]
+    volumes: [./backend/CinemaCity.CatalogService/wwwroot/uploads:/app/wwwroot/uploads]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  api:
+    build:
+      <<: *service-build
+      args: { PROJECT: CinemaCity.CommunityService }
+    environment:
+      <<: *service-environment
+      ASPNETCORE_URLS: http://+:5003
+      ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=cinemacity_community;Username=postgres;Password=${POSTGRES_PASSWORD}
+      Services__Enabled: "true"
+    expose: ["5003"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  gateway:
+    build:
+      <<: *service-build
+      args: { PROJECT: CinemaCity.ApiGateway }
+    environment:
+      Jwt__Secret: ${JWT_SECRET}
+      Jwt__Issuer: CinemaCity
+      Jwt__Audience: CinemaCity.Client
+      ASPNETCORE_URLS: http://+:5000
+      Services__AuthUrl: http://auth:5001
+      Services__CatalogUrl: http://catalog:5002
+      Services__MonolithUrl: http://api:5100
+      Services__CommunityUrl: http://api:5003
+      Gateway__Mode: Services
+    ports: ["127.0.0.1:5000:5000"]
+    depends_on: [auth, catalog, api]
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args: { VITE_API_URL: "" }
+    ports: ["${FRONTEND_PORT:-5173}:80"]
+    depends_on: [gateway]
+
+  postgres-test:
+    image: postgres:18
+    profiles: [test]
+    environment:
+      POSTGRES_DB: cinemacity_tests
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports: ["127.0.0.1:55432:5432"]
+    tmpfs: [/var/lib/postgresql]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d cinemacity_tests"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
 
 volumes:
-  postgres_data:
+  services_postgres_data:

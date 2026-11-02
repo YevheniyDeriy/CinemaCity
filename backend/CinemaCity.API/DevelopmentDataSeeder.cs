@@ -1,7 +1,7 @@
 using Bogus;
+using CinemaCity.Application.Persistence;
 using CinemaCity.Domain.Entities;
 using CinemaCity.Domain.Enums;
-using CinemaCity.Infrastructure.Data;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 
@@ -19,16 +19,22 @@ public static class DevelopmentDataSeeder
         CancellationToken cancellationToken = default)
     {
         using var scope = serviceProvider.CreateScope();
-        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var userRepository = scope.ServiceProvider.GetRequiredService<IRepository<User>>();
+        var movieRepository = scope.ServiceProvider.GetRequiredService<IRepository<Movie>>();
+        var ratingRepository = scope.ServiceProvider.GetRequiredService<IRepository<Rating>>();
+        var reviewRepository = scope.ServiceProvider.GetRequiredService<IRepository<Review>>();
+        var listRepository = scope.ServiceProvider.GetRequiredService<IRepository<UserMovieList>>();
+        var listItemRepository = scope.ServiceProvider.GetRequiredService<IRepository<UserMovieListItem>>();
+        var unitOfWork = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
         var passwordHasher = scope.ServiceProvider.GetRequiredService<IPasswordHasher<User>>();
 
-        if (await dbContext.Users.AnyAsync(user => user.Email.EndsWith($"@{TestEmailDomain}"), cancellationToken))
+        if (await userRepository.Query().AnyAsync(user => user.Email.EndsWith($"@{TestEmailDomain}"), cancellationToken))
         {
             logger.LogInformation("Development seed users already exist. Skipping development data seeding.");
             return;
         }
 
-        var movies = await dbContext.Movies
+        var movies = await movieRepository.Query()
             .Where(movie => !movie.IsDeleted)
             .OrderByDescending(movie => movie.AverageRating)
             .Take(40)
@@ -42,7 +48,7 @@ public static class DevelopmentDataSeeder
 
         var faker = new Faker("uk");
         var users = CreateUsers(passwordHasher, faker);
-        dbContext.Users.AddRange(users);
+        userRepository.AddRange(users);
 
         var ratings = new List<Rating>();
         var reviews = new List<Review>();
@@ -51,7 +57,9 @@ public static class DevelopmentDataSeeder
 
         foreach (var user in users)
         {
-            var userMovies = faker.PickRandom(movies, Math.Min(movies.Count, faker.Random.Int(8, 16))).DistinctBy(movie => movie.Id).ToList();
+            var userMovies = faker.PickRandom(movies, Math.Min(movies.Count, faker.Random.Int(8, 16)))
+                .DistinctBy(movie => movie.Id)
+                .ToList();
             var createdAt = faker.Date.BetweenOffset(DateTimeOffset.UtcNow.AddMonths(-8), DateTimeOffset.UtcNow.AddDays(-2));
 
             var watchLater = new UserMovieList
@@ -59,7 +67,7 @@ public static class DevelopmentDataSeeder
                 Id = Guid.NewGuid(),
                 UserId = user.Id,
                 Name = "Перегляну пізніше",
-                Description = "Тестовий список для Development seed.",
+                Description = "Приватний тестовий список для локальної розробки.",
                 IsPublic = false,
                 CreatedAt = createdAt
             };
@@ -69,7 +77,7 @@ public static class DevelopmentDataSeeder
                 Id = Guid.NewGuid(),
                 UserId = user.Id,
                 Name = "Улюблене",
-                Description = "Тестовий список для Development seed.",
+                Description = "Публічний тестовий список, який видно у профілі користувача.",
                 IsPublic = true,
                 CreatedAt = createdAt.AddDays(faker.Random.Int(1, 10))
             };
@@ -128,12 +136,12 @@ public static class DevelopmentDataSeeder
             }
         }
 
-        dbContext.Ratings.AddRange(ratings.DistinctBy(rating => new { rating.UserId, rating.MovieId }));
-        dbContext.Reviews.AddRange(reviews.DistinctBy(review => new { review.UserId, review.MovieId }));
-        dbContext.UserMovieLists.AddRange(lists);
-        dbContext.UserMovieListItems.AddRange(listItems.DistinctBy(item => new { item.UserMovieListId, item.MovieId }));
+        ratingRepository.AddRange(ratings.DistinctBy(rating => new { rating.UserId, rating.MovieId }));
+        reviewRepository.AddRange(reviews.DistinctBy(review => new { review.UserId, review.MovieId }));
+        listRepository.AddRange(lists);
+        listItemRepository.AddRange(listItems.DistinctBy(item => new { item.UserMovieListId, item.MovieId }));
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
         logger.LogInformation("Seeded {UsersCount} development users, {RatingsCount} ratings and {ReviewsCount} reviews.", users.Count, ratings.Count, reviews.Count);
     }
 
@@ -149,7 +157,6 @@ public static class DevelopmentDataSeeder
                 Username = $"dev_user_{index}",
                 Email = $"dev.user{index}@{TestEmailDomain}",
                 Role = UserRole.User,
-                IsEmailConfirmed = true,
                 AvatarUrl = null,
                 CreatedAt = faker.Date.BetweenOffset(DateTimeOffset.UtcNow.AddYears(-1), DateTimeOffset.UtcNow.AddMonths(-1))
             };
@@ -169,7 +176,7 @@ public static class DevelopmentDataSeeder
             "Після перегляду «{0}» хочеться повернутися до окремих моментів ще раз.",
             "У «{0}» особливо спрацювали акторські роботи та атмосфера.",
             "«{0}» не ідеальний, але точно вартий уваги для вечірнього перегляду.",
-            "Найсильніше у «{0}» — настрій, музика і фінальний акт."
+            "Найсильніше у «{0}» - настрій, музика і фінальний акт."
         };
 
         return string.Format(faker.PickRandom(templates), title);

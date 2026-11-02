@@ -1,13 +1,12 @@
 using System.Security.Claims;
+using CinemaCity.Application.Persistence;
 using CinemaCity.Domain.Entities;
 using CinemaCity.Domain.Enums;
-using CinemaCity.Infrastructure.Data;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.Google;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Identity;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
 namespace CinemaCity.API.Auth;
@@ -20,9 +19,6 @@ public static class AuthEndpoints
 
         group.MapPost("/register", RegisterAsync)
             .WithName("Register");
-
-        group.MapPost("/confirm-email", ConfirmEmailAsync)
-            .WithName("ConfirmEmail");
 
         group.MapPost("/login", LoginAsync)
             .WithName("Login");
@@ -48,9 +44,13 @@ public static class AuthEndpoints
 
     private static async Task<IResult> RegisterAsync(
         RegisterRequest request,
-        AppDbContext dbContext,
+        HttpContext httpContext,
+        IUserRepository userRepository,
+        IRefreshTokenRepository refreshTokenRepository,
+        IUnitOfWork unitOfWork,
         IPasswordHasher<User> passwordHasher,
         TokenService tokenService,
+        IOptions<JwtOptions> jwtOptions,
         CancellationToken cancellationToken)
     {
         var username = request.Username.Trim();
@@ -76,16 +76,14 @@ public static class AuthEndpoints
             return Results.BadRequest(new { Message = "Password confirmation does not match." });
         }
 
-        var usernameExists = await dbContext.Users
-            .AnyAsync(user => user.Username == username, cancellationToken);
+        var usernameExists = await userRepository.UsernameExistsAsync(username, cancellationToken);
 
         if (usernameExists)
         {
             return Results.Conflict(new { Message = "Username is already taken." });
         }
 
-        var emailExists = await dbContext.Users
-            .AnyAsync(user => user.Email == email, cancellationToken);
+        var emailExists = await userRepository.EmailExistsAsync(email, cancellationToken);
 
         if (emailExists)
         {
@@ -97,83 +95,38 @@ public static class AuthEndpoints
             Id = Guid.NewGuid(),
             Username = username,
             Email = email,
-            IsEmailConfirmed = false,
             CreatedAt = DateTimeOffset.UtcNow
         };
 
         user.PasswordHash = passwordHasher.HashPassword(user, request.Password);
 
-        dbContext.Users.Add(user);
-        await dbContext.SaveChangesAsync(cancellationToken);
-
-        var (confirmationToken, _) = tokenService.CreateEmailConfirmationToken(user);
-
-        return Results.Created($"/api/users/{user.Id}", new RegisterResponse(
-            user.Id,
-            user.Username,
-            user.Email,
-            user.IsEmailConfirmed,
-            confirmationToken));
-    }
-
-    private static async Task<IResult> ConfirmEmailAsync(
-        ConfirmEmailRequest request,
-        HttpContext httpContext,
-        AppDbContext dbContext,
-        TokenService tokenService,
-        IOptions<JwtOptions> jwtOptions,
-        CancellationToken cancellationToken)
-    {
-        var principal = tokenService.ValidateToken(request.Token);
-
-        if (principal is null || principal.FindFirstValue("purpose") != "email-confirmation")
-        {
-            return Results.BadRequest(new { Message = "Email confirmation token is invalid or expired." });
-        }
-
-        var userIdValue = principal.FindFirstValue(ClaimTypes.NameIdentifier)
-            ?? principal.FindFirstValue("sub");
-
-        if (!Guid.TryParse(userIdValue, out var userId))
-        {
-            return Results.BadRequest(new { Message = "Email confirmation token is invalid." });
-        }
-
-        var user = await dbContext.Users
-            .FirstOrDefaultAsync(candidate => candidate.Id == userId, cancellationToken);
-
-        if (user is null)
-        {
-            return Results.NotFound(new { Message = "User was not found." });
-        }
-
-        user.IsEmailConfirmed = true;
-        user.UpdatedAt = DateTimeOffset.UtcNow;
+        userRepository.Add(user);
 
         var authResponse = CreateAuthSession(
             user,
             httpContext,
-            dbContext,
+            refreshTokenRepository,
             tokenService,
             jwtOptions.Value);
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return Results.Ok(authResponse);
+        return Results.Created($"/api/users/{user.Id}", authResponse);
     }
 
     private static async Task<IResult> LoginAsync(
         LoginRequest request,
         HttpContext httpContext,
-        AppDbContext dbContext,
+        IUserRepository userRepository,
+        IRefreshTokenRepository refreshTokenRepository,
+        IUnitOfWork unitOfWork,
         IPasswordHasher<User> passwordHasher,
         TokenService tokenService,
         IOptions<JwtOptions> jwtOptions,
         CancellationToken cancellationToken)
     {
         var email = NormalizeEmail(request.Email);
-        var user = await dbContext.Users
-            .FirstOrDefaultAsync(candidate => candidate.Email == email, cancellationToken);
+        var user = await userRepository.GetByEmailAsync(email, cancellationToken);
 
         if (user is null || user.PasswordHash is null)
         {
@@ -196,14 +149,9 @@ public static class AuthEndpoints
                 user.LockoutEndAt = DateTimeOffset.UtcNow.AddMinutes(15);
             }
 
-            await dbContext.SaveChangesAsync(cancellationToken);
+            await unitOfWork.SaveChangesAsync(cancellationToken);
 
             return Results.Unauthorized();
-        }
-
-        if (!user.IsEmailConfirmed)
-        {
-            return Results.Problem("Email must be confirmed before login.", statusCode: StatusCodes.Status403Forbidden);
         }
 
         user.FailedLoginAttempts = 0;
@@ -213,11 +161,11 @@ public static class AuthEndpoints
         var authResponse = CreateAuthSession(
             user,
             httpContext,
-            dbContext,
+            refreshTokenRepository,
             tokenService,
             jwtOptions.Value);
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Results.Ok(authResponse);
     }
@@ -225,7 +173,8 @@ public static class AuthEndpoints
     private static async Task<IResult> RefreshAsync(
         RefreshRequest? request,
         HttpContext httpContext,
-        AppDbContext dbContext,
+        IRefreshTokenRepository refreshTokenRepository,
+        IUnitOfWork unitOfWork,
         TokenService tokenService,
         IOptions<JwtOptions> jwtOptions,
         CancellationToken cancellationToken)
@@ -239,9 +188,7 @@ public static class AuthEndpoints
         }
 
         var tokenHash = TokenService.HashRefreshToken(refreshToken);
-        var storedToken = await dbContext.RefreshTokens
-            .Include(token => token.User)
-            .FirstOrDefaultAsync(token => token.TokenHash == tokenHash, cancellationToken);
+        var storedToken = await refreshTokenRepository.GetByTokenHashWithUserAsync(tokenHash, cancellationToken);
 
         if (storedToken is null || storedToken.RevokedAt is not null || storedToken.ExpiresAt <= DateTimeOffset.UtcNow)
         {
@@ -253,11 +200,11 @@ public static class AuthEndpoints
         var authResponse = CreateAuthSession(
             storedToken.User,
             httpContext,
-            dbContext,
+            refreshTokenRepository,
             tokenService,
             jwtOptions.Value);
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Results.Ok(authResponse);
     }
@@ -265,7 +212,8 @@ public static class AuthEndpoints
     private static async Task<IResult> LogoutAsync(
         RefreshRequest? request,
         HttpContext httpContext,
-        AppDbContext dbContext,
+        IRefreshTokenRepository refreshTokenRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
         var refreshToken = request?.RefreshToken
@@ -274,13 +222,12 @@ public static class AuthEndpoints
         if (!string.IsNullOrWhiteSpace(refreshToken))
         {
             var tokenHash = TokenService.HashRefreshToken(refreshToken);
-            var storedToken = await dbContext.RefreshTokens
-                .FirstOrDefaultAsync(token => token.TokenHash == tokenHash, cancellationToken);
+            var storedToken = await refreshTokenRepository.GetByTokenHashAsync(tokenHash, cancellationToken);
 
             if (storedToken is not null && storedToken.RevokedAt is null)
             {
                 storedToken.RevokedAt = DateTimeOffset.UtcNow;
-                await dbContext.SaveChangesAsync(cancellationToken);
+                await unitOfWork.SaveChangesAsync(cancellationToken);
             }
         }
 
@@ -318,7 +265,9 @@ public static class AuthEndpoints
 
     private static async Task<IResult> GoogleCallbackAsync(
         HttpContext httpContext,
-        AppDbContext dbContext,
+        IUserRepository userRepository,
+        IRefreshTokenRepository refreshTokenRepository,
+        IUnitOfWork unitOfWork,
         TokenService tokenService,
         IOptions<JwtOptions> jwtOptions,
         string? returnUrl,
@@ -341,40 +290,35 @@ public static class AuthEndpoints
         }
 
         var normalizedEmail = NormalizeEmail(email);
-        var user = await dbContext.Users
-            .FirstOrDefaultAsync(
-                candidate => candidate.GoogleId == googleId || candidate.Email == normalizedEmail,
-                cancellationToken);
+        var user = await userRepository.GetByGoogleIdOrEmailAsync(googleId, normalizedEmail, cancellationToken);
 
         if (user is null)
         {
             user = new User
             {
                 Id = Guid.NewGuid(),
-                Username = await CreateUniqueUsernameAsync(dbContext, name, normalizedEmail, cancellationToken),
+                Username = await CreateUniqueUsernameAsync(userRepository, name, normalizedEmail, cancellationToken),
                 Email = normalizedEmail,
                 GoogleId = googleId,
-                IsEmailConfirmed = true,
                 CreatedAt = DateTimeOffset.UtcNow
             };
 
-            dbContext.Users.Add(user);
+            userRepository.Add(user);
         }
         else
         {
             user.GoogleId ??= googleId;
-            user.IsEmailConfirmed = true;
             user.UpdatedAt = DateTimeOffset.UtcNow;
         }
 
         var authResponse = CreateAuthSession(
             user,
             httpContext,
-            dbContext,
+            refreshTokenRepository,
             tokenService,
             jwtOptions.Value);
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
         await httpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
 
         if (!string.IsNullOrWhiteSpace(returnUrl))
@@ -388,7 +332,7 @@ public static class AuthEndpoints
     private static AuthResponse CreateAuthSession(
         User user,
         HttpContext httpContext,
-        AppDbContext dbContext,
+        IRefreshTokenRepository refreshTokenRepository,
         TokenService tokenService,
         JwtOptions jwtOptions)
     {
@@ -396,7 +340,7 @@ public static class AuthEndpoints
         var refreshToken = TokenService.CreateRefreshToken();
         var refreshTokenExpiresAt = DateTimeOffset.UtcNow.AddDays(jwtOptions.RefreshTokenDays);
 
-        dbContext.RefreshTokens.Add(new RefreshToken
+        refreshTokenRepository.Add(new RefreshToken
         {
             Id = Guid.NewGuid(),
             UserId = user.Id,
@@ -459,7 +403,7 @@ public static class AuthEndpoints
     }
 
     private static async Task<string> CreateUniqueUsernameAsync(
-        AppDbContext dbContext,
+        IUserRepository userRepository,
         string? name,
         string email,
         CancellationToken cancellationToken)
@@ -471,7 +415,7 @@ public static class AuthEndpoints
         var username = baseUsername;
         var suffix = 1;
 
-        while (await dbContext.Users.AnyAsync(user => user.Username == username, cancellationToken))
+        while (await userRepository.UsernameExistsAsync(username, cancellationToken))
         {
             username = $"{baseUsername}{suffix}";
             suffix += 1;

@@ -1,0 +1,369 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "CinemaCity API Gateway — Lab 3",
+    "version": "1.0",
+    "description": "Parallel screen composition, local JWT validation, public catalog cache (60 s TTL), fixed window limits: anonymous 120/min, user 240/min, login 5/min. Existing service APIs remain proxied. Only the gateway is published in Docker."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:5000"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "Bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    }
+  },
+  "paths": {
+    "/api/v1/screens/movies/{id}": {
+      "get": {
+        "summary": "Movie details and my current state",
+        "description": "Calls Catalog and Community concurrently. Catalog failure rejects the request; Community failure is explicit in partial/communityStatus. Caller userId and identity headers are ignored. Forwarded JWT represents the authenticated user.",
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Full screen or explicitly partial screen if Community failed. Never cached as a whole.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "movie",
+                    "myState",
+                    "partial",
+                    "communityStatus"
+                  ],
+                  "properties": {
+                    "movie": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "releaseYear": {
+                          "type": "integer"
+                        },
+                        "posterUrl": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      }
+                    },
+                    "myState": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "description": "Gateway-owned personal view, fetched for each request and never cached.",
+                      "properties": {
+                        "watchlistStatus": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "myScore": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "lists": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "format": "uuid"
+                              },
+                              "name": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "partial": {
+                      "type": "boolean"
+                    },
+                    "communityStatus": {
+                      "type": "string",
+                      "enum": [
+                        "available",
+                        "unavailable",
+                        "timeout",
+                        "notFound",
+                        "invalidResponse"
+                      ]
+                    }
+                  }
+                },
+                "examples": {
+                  "complete": {
+                    "value": {
+                      "movie": {
+                        "id": "11111111-1111-1111-1111-111111111111",
+                        "title": "CinemaCity film",
+                        "releaseYear": 2026,
+                        "posterUrl": null
+                      },
+                      "myState": {
+                        "watchlistStatus": null,
+                        "myScore": 8,
+                        "lists": []
+                      },
+                      "partial": false,
+                      "communityStatus": "available"
+                    }
+                  },
+                  "communityUnavailable": {
+                    "value": {
+                      "movie": {
+                        "id": "11111111-1111-1111-1111-111111111111",
+                        "title": "CinemaCity film",
+                        "releaseYear": 2026,
+                        "posterUrl": null
+                      },
+                      "myState": null,
+                      "partial": true,
+                      "communityStatus": "unavailable"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A valid access token is required",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "title",
+                    "status"
+                  ],
+                  "properties": {
+                    "type": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "integer"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "A valid access token is required",
+                  "status": 401,
+                  "traceId": "demo-correlation"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Movie not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "title",
+                    "status"
+                  ],
+                  "properties": {
+                    "type": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "integer"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Movie not found",
+                  "status": 404,
+                  "traceId": "demo-correlation"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request limit exceeded",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "title",
+                    "status"
+                  ],
+                  "properties": {
+                    "type": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "integer"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Request limit exceeded",
+                  "status": 429,
+                  "traceId": "demo-correlation"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Catalog is unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "title",
+                    "status"
+                  ],
+                  "properties": {
+                    "type": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "integer"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Catalog is unavailable",
+                  "status": 503,
+                  "traceId": "demo-correlation"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Downstream request timed out",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "title",
+                    "status"
+                  ],
+                  "properties": {
+                    "type": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "integer"
+                    },
+                    "traceId": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "example": {
+                  "type": "about:blank",
+                  "title": "Downstream request timed out",
+                  "status": 504,
+                  "traceId": "demo-correlation"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "summary": "Gateway liveness",
+        "responses": {
+          "200": {
+            "description": "Gateway process is alive"
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "summary": "Auth, Catalog and Community availability in parallel",
+        "responses": {
+          "200": {
+            "description": "All three services available"
+          },
+          "503": {
+            "description": "At least one dependency unavailable; services array identifies each state"
+          }
+        }
+      }
+    }
+  }
+}

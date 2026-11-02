@@ -1,11 +1,13 @@
-﻿import React, { FormEvent, createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { api, apiBaseUrl, apiFetch, ApiError } from './api/client';
+import { ClientCatalog, ClientDetails, ClientRatingForm, ClientMyRatings, ClientAuth } from './components/ClientPages';
+import React, { FormEvent, createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { PasswordField } from './components/PasswordField';
 import './styles.css';
 
-const defaultApiUrl =
-  typeof window === 'undefined' ? 'http://localhost:5029' : `${window.location.protocol}//${window.location.hostname}:5029`;
-const apiUrl = import.meta.env.VITE_API_URL ?? defaultApiUrl;
+const apiUrl = apiBaseUrl;
+const externalAuthApiUrl = apiBaseUrl || (typeof location === 'undefined' ? 'http://localhost:5000' : `${location.protocol}//${location.hostname}:5000`);
 
 type ThemeMode = 'dark' | 'light';
 
@@ -13,7 +15,7 @@ type AuthUser = {
   id: string;
   username: string;
   email: string;
-  role: number;
+  role: number | string;
   avatarUrl?: string | null;
 };
 
@@ -55,14 +57,6 @@ type AuthResponse = {
   user: AuthUser;
 };
 
-type RegisterResponse = {
-  userId: string;
-  username: string;
-  email: string;
-  isEmailConfirmed: boolean;
-  emailConfirmationToken: string;
-};
-
 type SpotlightSlide = {
   title: string;
   meta: string;
@@ -93,6 +87,15 @@ type AdminPerson = {
 type UploadResponse = {
   path: string;
   url: string;
+};
+
+type ImportResult = {
+  fetched: number;
+  added: number;
+  updated: number;
+  skipped: number;
+  errorsCount: number;
+  errors: string[];
 };
 
 type MovieCard = {
@@ -135,6 +138,10 @@ type EpisodeDetails = {
   duration?: number | null;
   averageRating: number;
   ratingsCount: number;
+  userRating?: {
+    id: string;
+    score: number;
+  } | null;
 };
 
 type SeasonDetails = {
@@ -166,8 +173,16 @@ type ReviewResponse = {
   status?: number | string;
   rejectionReason?: string | null;
   likesCount: number;
+  isLikedByCurrentUser?: boolean;
   createdAt: string;
   updatedAt?: string | null;
+};
+
+type MovieCastFormItem = {
+  personId: string;
+  creditType: string;
+  roleName: string;
+  sortOrder: string;
 };
 
 type CommentResponse = {
@@ -236,6 +251,29 @@ type MovieListItem = MovieCard & {
 
 type MovieListDetails = MovieListSummary & {
   items: MovieListItem[];
+};
+
+type PublicUserProfile = {
+  id: string;
+  username: string;
+  avatarUrl?: string | null;
+  createdAt: string;
+  publicListsCount: number;
+  approvedReviewsCount: number;
+};
+
+type PublicUserReview = {
+  id: string;
+  movieId: string;
+  movieTitle: string;
+  moviePosterUrl?: string | null;
+  contentType: number | string;
+  releaseYear: number;
+  content: string;
+  isSpoiler: boolean;
+  likesCount: number;
+  createdAt: string;
+  updatedAt?: string | null;
 };
 
 type PagedResult<T> = {
@@ -307,7 +345,6 @@ function App() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [confirmationToken, setConfirmationToken] = useState('');
   const [accessToken, setAccessToken] = useState('');
   const [accessTokenExpiresAt, setAccessTokenExpiresAt] = useState('');
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -321,7 +358,7 @@ function App() {
   const googleLoginUrl = useMemo(() => {
     const returnUrl = typeof window === 'undefined' ? '/auth' : `${window.location.origin}/auth?google=success`;
 
-    return `${apiUrl}/api/auth/google?returnUrl=${encodeURIComponent(returnUrl)}`;
+    return `${externalAuthApiUrl}/api/auth/google?returnUrl=${encodeURIComponent(returnUrl)}`;
   }, []);
 
   const status = useMemo(() => {
@@ -329,12 +366,8 @@ function App() {
       return `Ви увійшли як ${user.username}`;
     }
 
-    if (confirmationToken) {
-      return 'Залишилося підтвердити пошту';
-    }
-
     return 'Гість CinemaCity';
-  }, [confirmationToken, user]);
+  }, [user]);
 
   function notify(message: string, tone: ToastTone = 'info') {
     const id = Date.now() + Math.floor(Math.random() * 1000);
@@ -344,40 +377,33 @@ function App() {
     }, 4200);
   }
 
+  function dismissToast(id: number) {
+    setToasts((current) => current.filter((toast) => toast.id !== id));
+  }
+
   function applyAuthSession(auth: AuthResponse) {
+    api.setSession(auth);
     setAccessToken(auth.accessToken);
     setAccessTokenExpiresAt(auth.accessTokenExpiresAt);
     setUser(auth.user);
   }
 
   function clearAuthSession() {
+    api.setSession(null);
     setAccessToken('');
     setAccessTokenExpiresAt('');
     setUser(null);
   }
 
   async function refreshAuthSession(): Promise<AuthResponse> {
-    const response = await fetch(`${apiUrl}/api/auth/refresh`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({})
-    });
-
-    if (response.status === 401) {
-      throw new Error('Unauthorized');
-    }
-
-    const data = await readResponseBody(response);
-
-    if (!response.ok) {
-      throw new Error(getApiErrorMessage(data, 'Не вдалося відкрити ваш профіль.'));
-    }
-
-    const auth = data as AuthResponse;
+    const auth = await api.restoreSession() as AuthResponse;
     applyAuthSession(auth);
     return auth;
   }
+
+  useEffect(() => api.subscribeSession(auth => {
+    if (auth) applyAuthSession(auth); else clearAuthSession();
+  }), []);
 
   useEffect(() => {
     if (didRestoreAuthRef.current) {
@@ -398,7 +424,7 @@ function App() {
     refreshAuthSession()
       .then(() => {
         if (isGoogleReturn) {
-          setMessage('Вхід через Google завершено. Приємного перегляду.');
+          setMessage('');
           notify('Вхід через Google завершено.', 'success');
         }
       })
@@ -407,7 +433,7 @@ function App() {
         if (isGoogleReturn) {
           setMessage('Google повернув вас у CinemaCity. Спробуйте увійти ще раз.');
           notify('Не вдалося завершити Google-вхід.', 'error');
-        } else if (error instanceof Error && error.message !== 'Unauthorized') {
+        } else if (error instanceof Error && !(error instanceof ApiError && error.status === 401)) {
           notify('Не вдалося відновити сесію.', 'error');
         }
       })
@@ -427,7 +453,7 @@ function App() {
 
     const refreshTimer = window.setTimeout(() => {
       refreshAuthSession().catch((error) => {
-        if (error instanceof Error && error.message === 'Unauthorized') {
+        if (error instanceof Error && (error instanceof ApiError && error.status === 401)) {
           clearAuthSession();
           notify('Сесію завершено. Увійдіть ще раз.', 'error');
           return;
@@ -441,7 +467,7 @@ function App() {
   }, [accessTokenExpiresAt, user]);
 
   async function request<T>(path: string, options: RequestInit): Promise<T> {
-    const response = await fetch(`${apiUrl}${path}`, {
+    const response = await apiFetch(`${apiUrl}${path}`, {
       ...options,
       credentials: 'include',
       headers: {
@@ -466,13 +492,15 @@ function App() {
     setPasswordError('');
 
     try {
-      const result = await request<RegisterResponse>('/api/auth/register', {
+      const result = await request<AuthResponse>('/api/auth/register', {
         method: 'POST',
         body: JSON.stringify({ username, email, password, confirmPassword })
       });
 
-      setConfirmationToken(result.emailConfirmationToken);
+      applyAuthSession(result);
+      setMode('login');
       setMessage('');
+      notify('Акаунт створено. Ви увійшли.', 'success');
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Не вдалося створити акаунт.';
 
@@ -483,32 +511,6 @@ function App() {
       }
 
       setMessage(errorMessage);
-    } finally {
-      setIsBusy(false);
-    }
-  }
-
-  async function handleConfirmEmail() {
-    if (!confirmationToken) {
-      setMessage('Спочатку створіть акаунт.');
-      return;
-    }
-
-    setIsBusy(true);
-
-    try {
-      const auth = await request<AuthResponse>('/api/auth/confirm-email', {
-        method: 'POST',
-        body: JSON.stringify({ token: confirmationToken })
-      });
-
-      setConfirmationToken('');
-      applyAuthSession(auth);
-      setMode('login');
-      setMessage('Пошту підтверджено. Ви увійшли в CinemaCity.');
-      notify('Пошту підтверджено. Ви увійшли.', 'success');
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Не вдалося підтвердити пошту.');
     } finally {
       setIsBusy(false);
     }
@@ -525,7 +527,7 @@ function App() {
       });
 
       applyAuthSession(result);
-      setMessage('Ви увійшли в CinemaCity.');
+      setMessage('');
       notify('Ви увійшли в CinemaCity.', 'success');
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Не вдалося увійти.';
@@ -546,7 +548,7 @@ function App() {
       });
 
       clearAuthSession();
-      setMessage('Ви вийшли з акаунта.');
+      setMessage('');
       notify('Ви вийшли з акаунта.', 'info');
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Не вдалося вийти.';
@@ -563,44 +565,18 @@ function App() {
         <BrowserRouter>
           <Routes>
             <Route path="/" element={<HomePage accessToken={accessToken} user={user} />} />
-            <Route path="/catalog" element={<CatalogPage />} />
+            <Route path="/catalog" element={<main className="page-shell"><SiteHeader /><ClientCatalog /><SiteFooter /></main>} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/profile" element={!isAuthReady ? <AuthGate /> : user && accessToken ? <ProfilePage accessToken={accessToken} user={user} /> : <Navigate to="/auth" replace />} />
-            <Route path="/admin" element={!isAuthReady ? <AuthGate /> : user && accessToken && Number(user.role) === 1 ? <AdminPage accessToken={accessToken} /> : <Navigate to="/auth" replace />} />
-            <Route path="/movies/:id" element={<MovieDetailsPage accessToken={accessToken} user={user} />} />
-            <Route
-              path="/auth"
-              element={
-                <AuthPage
-                  confirmPassword={confirmPassword}
-                  confirmationToken={confirmationToken}
-                  email={email}
-                  googleLoginUrl={googleLoginUrl}
-                  handleConfirmEmail={handleConfirmEmail}
-                  handleLogin={handleLogin}
-                  handleLogout={handleLogout}
-                  handleRegister={handleRegister}
-                  isBusy={isBusy}
-                  message={message}
-                  mode={mode}
-                  password={password}
-                  passwordError={passwordError}
-                  setConfirmPassword={setConfirmPassword}
-                  setEmail={setEmail}
-                  setMode={setMode}
-                  setPassword={setPassword}
-                  setPasswordError={setPasswordError}
-                  setUsername={setUsername}
-                  status={status}
-                  accessToken={accessToken}
-                  user={user}
-                  username={username}
-                />
-              }
-            />
+            <Route path="/users/:id" element={<PublicProfilePage />} />
+            <Route path="/admin" element={!isAuthReady ? <AuthGate /> : user && accessToken && isAdminUser(user) ? <AdminPage accessToken={accessToken} /> : <Navigate to="/auth" replace />} />
+            <Route path="/movies/:id" element={!isAuthReady ? <AuthGate /> : user ? <main className="page-shell"><SiteHeader /><ClientDetails /><SiteFooter /></main> : <Navigate to={`/auth?returnTo=${encodeURIComponent(window.location.pathname)}`} replace />} />
+            <Route path="/movies/:id/rate" element={!isAuthReady ? <AuthGate /> : user ? <main className="page-shell"><SiteHeader /><ClientRatingForm /><SiteFooter /></main> : <Navigate to={`/auth?returnTo=${encodeURIComponent(window.location.pathname)}`} replace />} />
+            <Route path="/my-ratings" element={!isAuthReady ? <AuthGate /> : user ? <main className="page-shell"><SiteHeader /><ClientMyRatings /><SiteFooter /></main> : <Navigate to="/auth?returnTo=/my-ratings" replace />} />
+            <Route path="/auth" element={<main className="page-shell"><SiteHeader /><ClientAuth /><SiteFooter /></main>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
-          <ToastViewport toasts={toasts} />
+          <ToastViewport toasts={toasts} onDismiss={dismissToast} />
         </BrowserRouter>
       </HeaderAuthContext.Provider>
     </ToastContext.Provider>
@@ -626,11 +602,11 @@ function HomePage({ accessToken, user }: { accessToken: string; user: AuthUser |
     const authHeaders: HeadersInit = accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
 
     Promise.all([
-      fetch(`${apiUrl}/api/home/recommendations?limit=10`, {
+      apiFetch(`${apiUrl}/api/home/recommendations?limit=10`, {
         signal: controller.signal,
         headers: authHeaders
       }).then(async (response) => (response.ok ? ((await response.json()) as HomeRailResponse).items : [])),
-      fetch(`${apiUrl}/api/home/popular-now?days=7&limit=10`, { signal: controller.signal }).then(async (response) =>
+      apiFetch(`${apiUrl}/api/home/popular-now?days=7&limit=10`, { signal: controller.signal }).then(async (response) =>
         response.ok ? ((await response.json()) as HomeRailResponse).items : []
       )
     ])
@@ -839,7 +815,7 @@ function SiteHeader() {
   return (
     <header className="site-header" aria-label="Головне меню">
       <Link className="brand-row" to="/">
-        <span className="brand-mark">CC</span>
+        <BrandMark />
         <span>CinemaCity</span>
       </Link>
 
@@ -869,21 +845,21 @@ function SiteHeader() {
       </form>
 
       <nav className="header-nav" aria-label="Розділи сайту">
-        <NavLink to="/catalog">Каталог</NavLink>
-        {user && Number(user.role) === 1 ? <NavLink to="/admin">Адмін</NavLink> : null}
+        <NavLink to="/my-ratings">Мої оцінки</NavLink>
+          <NavLink to="/catalog">Каталог</NavLink>
+        {user && isAdminUser(user) ? <NavLink to="/admin">Адмін панель</NavLink> : null}
         {user ? (
           <div className="user-menu">
             <button className="user-menu-trigger" type="button" onClick={() => setIsUserMenuOpen((value) => !value)} aria-expanded={isUserMenuOpen}>
               <span>{user.avatarUrl ? <img src={user.avatarUrl} alt="" /> : getInitials(user.username)}</span>
               <strong>{user.username}</strong>
-              <small aria-hidden="true">⌄</small>
             </button>
             {isUserMenuOpen ? (
               <div className="user-menu-popover">
                 <Link to="/profile">Профіль</Link>
                 <Link to="/profile?tab=watchlist">Хочу переглянути</Link>
                 <Link to="/profile?tab=watched">Переглянуто</Link>
-                <button disabled={isBusy} type="button" onClick={handleLogout}>
+                <button className="logout-action" disabled={isBusy} type="button" onClick={handleLogout}>
                   Вийти
                 </button>
               </div>
@@ -913,7 +889,7 @@ function SiteFooter() {
   return (
     <footer className="site-footer">
       <Link className="brand-row" to="/">
-        <span className="brand-mark">CC</span>
+        <BrandMark />
         <span>CinemaCity</span>
       </Link>
       <nav aria-label="Нижнє меню">
@@ -924,12 +900,24 @@ function SiteFooter() {
   );
 }
 
-function ToastViewport({ toasts }: { toasts: ToastMessage[] }) {
+function BrandMark() {
+  return (
+    <span className="brand-mark" aria-hidden="true">
+      <span className="brand-clapper" />
+      <span className="brand-play" />
+    </span>
+  );
+}
+
+function ToastViewport({ toasts, onDismiss }: { toasts: ToastMessage[]; onDismiss: (id: number) => void }) {
   return (
     <div className="toast-viewport" aria-live="polite" aria-label="Сповіщення">
       {toasts.map((toast) => (
         <div className={`toast ${toast.tone}`} key={toast.id}>
-          {toast.message}
+          <span>{toast.message}</span>
+          <button type="button" onClick={() => onDismiss(toast.id)} aria-label="Закрити сповіщення">
+            ×
+          </button>
         </div>
       ))}
     </div>
@@ -937,14 +925,10 @@ function ToastViewport({ toasts }: { toasts: ToastMessage[] }) {
 }
 
 type AuthPageProps = {
-  accessToken: string;
   confirmPassword: string;
-  confirmationToken: string;
   email: string;
   googleLoginUrl: string;
-  handleConfirmEmail: () => Promise<void>;
   handleLogin: (event: FormEvent<HTMLFormElement>) => Promise<void>;
-  handleLogout: () => Promise<void>;
   handleRegister: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   isBusy: boolean;
   message: string;
@@ -963,14 +947,10 @@ type AuthPageProps = {
 };
 
 function AuthPage({
-  accessToken,
   confirmPassword,
-  confirmationToken,
   email,
   googleLoginUrl,
-  handleConfirmEmail,
   handleLogin,
-  handleLogout,
   handleRegister,
   isBusy,
   message,
@@ -1066,10 +1046,7 @@ function AuthPage({
                 Email
                 <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@example.com" type="email" />
               </label>
-              <label>
-                Пароль
-                <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Ваш пароль" type="password" />
-              </label>
+              <PasswordField label="Пароль" value={password} onChange={setPassword} placeholder="Ваш пароль" />
               <button className="primary-action" disabled={isBusy} type="submit">
                 Увійти
               </button>
@@ -1084,27 +1061,15 @@ function AuthPage({
                 Email
                 <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@example.com" type="email" />
               </label>
-              <label>
-                Пароль
-                <input
-                  ref={registerPasswordRef}
-                  className={passwordError ? 'input-error' : ''}
-                  value={password}
-                  onChange={(event) => handlePasswordChange(event.target.value)}
-                  placeholder="Мінімум 8 символів"
-                  type="password"
-                />
-                {passwordError ? <span className="field-error">{passwordError}</span> : null}
-              </label>
-              <label>
-                Повторіть пароль
-                <input
-                  value={confirmPassword}
-                  onChange={(event) => setConfirmPassword(event.target.value)}
-                  placeholder="Повторіть пароль"
-                  type="password"
-                />
-              </label>
+              <PasswordField
+                error={passwordError}
+                inputRef={registerPasswordRef}
+                label="Пароль"
+                value={password}
+                onChange={handlePasswordChange}
+                placeholder="Мінімум 8 символів"
+              />
+              <PasswordField label="Повторіть пароль" value={confirmPassword} onChange={setConfirmPassword} placeholder="Повторіть пароль" />
               <button className="primary-action" disabled={isBusy} type="submit">
                 Створити акаунт
               </button>
@@ -1114,15 +1079,6 @@ function AuthPage({
           <a className="google-link" href={googleLoginUrl}>
             Увійти через Google
           </a>
-
-          {confirmationToken ? (
-            <div className="confirm-strip">
-              <p>Демо-токен підтвердження отримано. Натисніть кнопку, щоб активувати акаунт.</p>
-              <button disabled={isBusy} type="button" onClick={handleConfirmEmail}>
-                Підтвердити пошту
-              </button>
-            </div>
-          ) : null}
 
           {message ? (
             <output className="message" aria-live="polite">
@@ -1163,6 +1119,9 @@ function AdminPage({ accessToken }: { accessToken: string }) {
           <Link className={activeTab === 'persons' ? 'active' : ''} to="/admin?tab=persons">
             Персони
           </Link>
+          <Link className={activeTab === 'tmdb' ? 'active' : ''} to="/admin?tab=tmdb">
+            TMDB
+          </Link>
           <Link className={activeTab === 'reviews' ? 'active' : ''} to="/admin?tab=reviews">
             Рецензії
           </Link>
@@ -1170,6 +1129,7 @@ function AdminPage({ accessToken }: { accessToken: string }) {
 
         {activeTab === 'genres' ? <AdminGenresPanel accessToken={accessToken} /> : null}
         {activeTab === 'persons' ? <AdminPersonsPanel accessToken={accessToken} /> : null}
+        {activeTab === 'tmdb' ? <AdminTmdbPanel accessToken={accessToken} /> : null}
         {activeTab === 'reviews' ? <AdminReviewsPanel accessToken={accessToken} /> : null}
         {activeTab === 'movies' ? <AdminMoviesPanel accessToken={accessToken} /> : null}
       </section>
@@ -1183,9 +1143,17 @@ function AdminMoviesPanel({ accessToken }: { accessToken: string }) {
   const { notify } = useToast();
   const [movies, setMovies] = useState<MovieCard[]>([]);
   const [genres, setGenres] = useState<AdminGenre[]>([]);
+  const [persons, setPersons] = useState<AdminPerson[]>([]);
+  const [movieQuery, setMovieQuery] = useState('');
   const [editingId, setEditingId] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [seriesSeasons, setSeriesSeasons] = useState<SeasonDetails[]>([]);
+  const [selectedSeasonId, setSelectedSeasonId] = useState('');
+  const [seasonForm, setSeasonForm] = useState({ seasonNumber: '1', title: '', description: '', releaseYear: '' });
+  const [episodeForm, setEpisodeForm] = useState({ episodeNumber: '1', title: '', description: '', airDate: '', duration: '' });
+  const [movieCast, setMovieCast] = useState<MovieCastFormItem[]>([]);
+  const [castForm, setCastForm] = useState<MovieCastFormItem>({ personId: '', creditType: 'Actor', roleName: '', sortOrder: '0' });
   const [form, setForm] = useState({
     title: '',
     originalTitle: '',
@@ -1202,13 +1170,19 @@ function AdminMoviesPanel({ accessToken }: { accessToken: string }) {
   useEffect(() => {
     loadAdminMovies();
     loadAdminGenres();
+    loadAdminPersons();
   }, [accessToken]);
 
-  async function loadAdminMovies() {
+  async function loadAdminMovies(search = movieQuery) {
     setIsLoading(true);
 
     try {
-      const response = await fetch(`${apiUrl}/api/movies?page=1&pageSize=50&sort=newest`);
+      const params = new URLSearchParams({ page: '1', pageSize: '50', sort: 'newest' });
+      if (search.trim()) {
+        params.set('q', search.trim());
+      }
+
+      const response = await apiFetch(`${apiUrl}/api/movies?${params}`);
       if (!response.ok) {
         throw new Error('Не вдалося завантажити фільми.');
       }
@@ -1231,6 +1205,14 @@ function AdminMoviesPanel({ accessToken }: { accessToken: string }) {
     }
   }
 
+  async function loadAdminPersons() {
+    try {
+      setPersons(await authedRequest<AdminPerson[]>('/api/admin/persons', accessToken));
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Не вдалося завантажити персон.', 'error');
+    }
+  }
+
   function updateField(field: keyof typeof form, value: string) {
     setForm((current) => ({ ...current, [field]: value }));
   }
@@ -1247,6 +1229,12 @@ function AdminMoviesPanel({ accessToken }: { accessToken: string }) {
 
   function resetMovieForm() {
     setEditingId('');
+    setSeriesSeasons([]);
+    setSelectedSeasonId('');
+    setSeasonForm({ seasonNumber: '1', title: '', description: '', releaseYear: '' });
+    setEpisodeForm({ episodeNumber: '1', title: '', description: '', airDate: '', duration: '' });
+    setMovieCast([]);
+    setCastForm({ personId: '', creditType: 'Actor', roleName: '', sortOrder: '0' });
     setForm({
       title: '',
       originalTitle: '',
@@ -1264,22 +1252,49 @@ function AdminMoviesPanel({ accessToken }: { accessToken: string }) {
   async function startEditMovie(movieId: string) {
     try {
       const movie = await fetchJson<MovieDetails>(`/api/movies/${movieId}`);
+      const isSeries = movie.contentType === 1 || movie.contentType === 'Series';
       setEditingId(movie.id);
       setForm({
         title: movie.title,
         originalTitle: movie.originalTitle ?? '',
-        contentType: movie.contentType === 1 || movie.contentType === 'Series' ? 'Series' : 'Movie',
+        contentType: isSeries ? 'Series' : 'Movie',
         releaseYear: movie.releaseYear.toString(),
-        duration: movie.duration?.toString() ?? '',
+        duration: isSeries ? '' : movie.duration?.toString() ?? '',
         description: movie.description ?? '',
         posterUrl: movie.posterUrl ?? '',
         backdropUrl: movie.backdropUrl ?? '',
         trailerYoutubeId: movie.trailerYoutubeId ?? '',
         genreIds: movie.genres.map((genre) => genre.id.toString())
       });
+      setMovieCast(movie.cast.map((cast, index) => ({
+        personId: cast.personId,
+        creditType: String(cast.creditType),
+        roleName: cast.roleName ?? '',
+        sortOrder: String(cast.sortOrder ?? index)
+      })));
+      if (isSeries) {
+        await loadSeriesSeasons(movie.id);
+      } else {
+        setSeriesSeasons([]);
+        setSelectedSeasonId('');
+      }
       notify('Фільм відкрито для редагування.', 'info');
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Не вдалося відкрити фільм.', 'error');
+    }
+  }
+
+  async function loadSeriesSeasons(movieId = editingId) {
+    if (!movieId) {
+      return;
+    }
+
+    try {
+      const seasons = await fetchJson<SeasonDetails[]>(`/api/movies/${movieId}/seasons`);
+      setSeriesSeasons(seasons);
+      setSelectedSeasonId((current) => (current && seasons.some((season) => season.id === current) ? current : seasons[0]?.id ?? ''));
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Не вдалося завантажити сезони.', 'error');
     }
   }
 
@@ -1292,15 +1307,20 @@ function AdminMoviesPanel({ accessToken }: { accessToken: string }) {
       originalTitle: form.originalTitle.trim() || null,
       contentType: form.contentType,
       releaseYear: Number(form.releaseYear),
-      duration: form.duration ? Number(form.duration) : null,
+      duration: form.contentType === 'Series' ? null : form.duration ? Number(form.duration) : null,
       description: form.description.trim() || null,
       posterUrl: form.posterUrl.trim() || null,
       backdropUrl: form.backdropUrl.trim() || null,
-      trailerYoutubeId: form.trailerYoutubeId.trim() || null,
+      trailerYoutubeId: extractYoutubeId(form.trailerYoutubeId) || null,
       genreIds: form.genreIds.map(Number),
       countryIds: [],
       languageIds: [],
-      cast: []
+      cast: movieCast.map((cast, index) => ({
+        personId: cast.personId,
+        creditType: normalizeCreditType(cast.creditType),
+        roleName: cast.roleName.trim() || null,
+        sortOrder: toNonNegativeInteger(cast.sortOrder, index)
+      }))
     };
 
     try {
@@ -1310,15 +1330,25 @@ function AdminMoviesPanel({ accessToken }: { accessToken: string }) {
           body: JSON.stringify(payload)
         });
         notify('Фільм оновлено.', 'success');
+        if (form.contentType === 'Series') {
+          await loadSeriesSeasons(editingId);
+        }
       } else {
-        await authedRequest('/api/admin/movies', accessToken, {
+        const created = await authedRequest<{ id: string }>('/api/admin/movies', accessToken, {
           method: 'POST',
           body: JSON.stringify(payload)
         });
-        notify('Фільм додано.', 'success');
+        notify(form.contentType === 'Series' ? 'Серіал додано. Тепер можна додати сезони й серії.' : 'Фільм додано.', 'success');
+
+        if (form.contentType === 'Series' && created.id) {
+          setEditingId(created.id);
+          await loadSeriesSeasons(created.id);
+        }
       }
 
-      resetMovieForm();
+      if (form.contentType !== 'Series') {
+        resetMovieForm();
+      }
       await loadAdminMovies();
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Не вдалося зберегти фільм.', 'error');
@@ -1353,6 +1383,99 @@ function AdminMoviesPanel({ accessToken }: { accessToken: string }) {
       notify(error instanceof Error ? error.message : 'Не вдалося завантажити зображення.', 'error');
     }
   }
+
+  async function submitSeason() {
+    if (!editingId) {
+      notify('Спочатку створіть або відкрийте серіал.', 'error');
+      return;
+    }
+
+    try {
+      const season = await authedRequest<SeasonDetails>(`/api/admin/movies/${editingId}/seasons`, accessToken, {
+        method: 'POST',
+        body: JSON.stringify({
+          seasonNumber: Number(seasonForm.seasonNumber),
+          title: seasonForm.title.trim() || null,
+          description: seasonForm.description.trim() || null,
+          releaseYear: seasonForm.releaseYear ? Number(seasonForm.releaseYear) : null
+        })
+      });
+      setSeasonForm({ seasonNumber: String(Number(seasonForm.seasonNumber) + 1), title: '', description: '', releaseYear: '' });
+      await loadSeriesSeasons(editingId);
+      setSelectedSeasonId(season.id);
+      notify('Сезон додано.', 'success');
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Не вдалося додати сезон.', 'error');
+    }
+  }
+
+  async function submitEpisode() {
+    if (!selectedSeasonId) {
+      notify('Спочатку оберіть або створіть сезон.', 'error');
+      return;
+    }
+
+    try {
+      await authedRequest(`/api/admin/seasons/${selectedSeasonId}/episodes`, accessToken, {
+        method: 'POST',
+        body: JSON.stringify({
+          episodeNumber: Number(episodeForm.episodeNumber),
+          title: episodeForm.title.trim(),
+          description: episodeForm.description.trim() || null,
+          airDate: episodeForm.airDate || null,
+          duration: episodeForm.duration ? Number(episodeForm.duration) : null
+        })
+      });
+      setEpisodeForm((current) => ({ episodeNumber: String(Number(current.episodeNumber) + 1), title: '', description: '', airDate: '', duration: '' }));
+      await loadSeriesSeasons(editingId);
+      notify('Серію додано.', 'success');
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Не вдалося додати серію.', 'error');
+    }
+  }
+
+  async function deleteSeason(seasonId: string) {
+    try {
+      await authedRequest(`/api/admin/seasons/${seasonId}`, accessToken, { method: 'DELETE' });
+      await loadSeriesSeasons(editingId);
+      notify('Сезон видалено.', 'success');
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Не вдалося видалити сезон.', 'error');
+    }
+  }
+
+  async function deleteEpisode(episodeId: string) {
+    try {
+      await authedRequest(`/api/admin/episodes/${episodeId}`, accessToken, { method: 'DELETE' });
+      await loadSeriesSeasons(editingId);
+      notify('Серію видалено.', 'success');
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Не вдалося видалити серію.', 'error');
+    }
+  }
+
+  function addCastMember() {
+    if (!castForm.personId) {
+      notify('Оберіть персону для акторського складу.', 'error');
+      return;
+    }
+
+    setMovieCast((current) => [
+      ...current,
+      {
+        ...castForm,
+        sortOrder: String(toNonNegativeInteger(castForm.sortOrder, current.length))
+      }
+    ]);
+    setCastForm({ personId: '', creditType: 'Actor', roleName: '', sortOrder: String(movieCast.length + 1) });
+  }
+
+  function removeCastMember(index: number) {
+    setMovieCast((current) => current.filter((_, itemIndex) => itemIndex !== index));
+  }
+
+  const isSeriesForm = form.contentType === 'Series';
+  const selectedSeason = seriesSeasons.find((season) => season.id === selectedSeasonId) ?? null;
 
   return (
     <section className="admin-workspace">
@@ -1389,10 +1512,12 @@ function AdminMoviesPanel({ accessToken }: { accessToken: string }) {
             Рік
             <input min="1888" max="2200" type="number" value={form.releaseYear} onChange={(event) => updateField('releaseYear', event.target.value)} required />
           </label>
-          <label>
-            Тривалість
-            <input min="1" type="number" value={form.duration} onChange={(event) => updateField('duration', event.target.value)} placeholder="хвилини" />
-          </label>
+          {!isSeriesForm ? (
+            <label>
+              Тривалість
+              <input min="1" type="number" value={form.duration} onChange={(event) => updateField('duration', event.target.value)} placeholder="хвилини" />
+            </label>
+          ) : null}
           <label>
             YouTube trailer ID
             <input value={form.trailerYoutubeId} onChange={(event) => updateField('trailerYoutubeId', event.target.value)} maxLength={64} />
@@ -1432,9 +1557,166 @@ function AdminMoviesPanel({ accessToken }: { accessToken: string }) {
           ))}
         </div>
 
+        <section className="cast-admin-panel">
+          <div>
+            <p className="eyebrow">Персони</p>
+            <h3>Актори та команда</h3>
+          </div>
+          <div className="cast-admin-form">
+            <label>
+              Персона
+              <select value={castForm.personId} onChange={(event) => setCastForm((current) => ({ ...current, personId: event.target.value }))}>
+                <option value="">Оберіть персону</option>
+                {persons.map((person) => (
+                  <option key={person.id} value={person.id}>{person.fullName}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Тип участі
+              <select value={castForm.creditType} onChange={(event) => setCastForm((current) => ({ ...current, creditType: event.target.value }))}>
+                <option value="Actor">Актор</option>
+                <option value="Director">Режисер</option>
+                <option value="Writer">Сценарист</option>
+                <option value="Producer">Продюсер</option>
+              </select>
+            </label>
+            <label>
+              Роль / посада в титрах
+              <input
+                value={castForm.roleName}
+                onChange={(event) => setCastForm((current) => ({ ...current, roleName: event.target.value }))}
+                placeholder={castForm.creditType === 'Actor' ? 'наприклад, Paul Atreides' : 'наприклад, постановник'}
+              />
+            </label>
+            <label>
+              Порядок показу
+              <input
+                min="0"
+                step="1"
+                type="number"
+                value={castForm.sortOrder}
+                onChange={(event) => setCastForm((current) => ({ ...current, sortOrder: sanitizeNonNegativeIntegerInput(event.target.value) }))}
+              />
+            </label>
+            <button type="button" onClick={addCastMember}>Додати персону</button>
+          </div>
+          {movieCast.length ? (
+            <div className="cast-admin-list">
+              {movieCast.map((cast, index) => {
+                const person = persons.find((candidate) => candidate.id === cast.personId);
+
+                return (
+                  <article key={`${cast.personId}-${index}`}>
+                    <div>
+                      <strong>{person?.fullName ?? 'Персона'}</strong>
+                      <span>{formatCreditType(cast.creditType)}{cast.roleName ? ` · ${cast.roleName}` : ''}</span>
+                    </div>
+                    <button type="button" onClick={() => removeCastMember(index)}>Прибрати</button>
+                  </article>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="muted-text">Персон ще не додано.</p>
+          )}
+        </section>
+
         <button className="primary-action" type="submit" disabled={isSaving}>
+          {isSaving ? <Spinner /> : null}
           {editingId ? 'Зберегти зміни' : 'Додати в каталог'}
         </button>
+
+        {isSeriesForm ? (
+          <section className="series-admin-panel">
+            <div>
+              <p className="eyebrow">Сезони та серії</p>
+              <h3>{editingId ? 'Керування серіалом' : 'Доступно після створення серіалу'}</h3>
+            </div>
+
+            {editingId ? (
+              <>
+                <div className="series-admin-form">
+                  <label>
+                    Номер сезону
+                    <input min="1" type="number" value={seasonForm.seasonNumber} onChange={(event) => setSeasonForm((current) => ({ ...current, seasonNumber: event.target.value }))} />
+                  </label>
+                  <label>
+                    Назва сезону
+                    <input value={seasonForm.title} onChange={(event) => setSeasonForm((current) => ({ ...current, title: event.target.value }))} />
+                  </label>
+                  <label>
+                    Рік сезону
+                    <input min="1888" max="2200" type="number" value={seasonForm.releaseYear} onChange={(event) => setSeasonForm((current) => ({ ...current, releaseYear: event.target.value }))} />
+                  </label>
+                  <label>
+                    Опис сезону
+                    <textarea value={seasonForm.description} onChange={(event) => setSeasonForm((current) => ({ ...current, description: event.target.value }))} />
+                  </label>
+                  <button type="button" onClick={submitSeason}>Додати сезон</button>
+                </div>
+
+                {seriesSeasons.length ? (
+                  <div className="season-admin-list">
+                    {seriesSeasons.map((season) => (
+                      <article className={season.id === selectedSeasonId ? 'active' : ''} key={season.id}>
+                        <button type="button" onClick={() => setSelectedSeasonId(season.id)}>
+                          S{season.seasonNumber} {season.title ?? ''}
+                          <span>{season.episodes.length} серій</span>
+                        </button>
+                        <button type="button" onClick={() => deleteSeason(season.id)}>Видалити</button>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="muted-text">Сезонів ще немає.</p>
+                )}
+
+                {selectedSeason ? (
+                  <div className="series-admin-form">
+                    <label>
+                      Номер серії
+                      <input min="1" type="number" value={episodeForm.episodeNumber} onChange={(event) => setEpisodeForm((current) => ({ ...current, episodeNumber: event.target.value }))} />
+                    </label>
+                    <label>
+                      Назва серії
+                      <input required value={episodeForm.title} onChange={(event) => setEpisodeForm((current) => ({ ...current, title: event.target.value }))} />
+                    </label>
+                    <label>
+                      Дата виходу
+                      <input type="date" value={episodeForm.airDate} onChange={(event) => setEpisodeForm((current) => ({ ...current, airDate: event.target.value }))} />
+                    </label>
+                    <label>
+                      Тривалість серії
+                      <input min="1" type="number" value={episodeForm.duration} onChange={(event) => setEpisodeForm((current) => ({ ...current, duration: event.target.value }))} placeholder="хвилини" />
+                    </label>
+                    <label>
+                      Опис серії
+                      <textarea maxLength={800} value={episodeForm.description} onChange={(event) => setEpisodeForm((current) => ({ ...current, description: event.target.value }))} />
+                    </label>
+                    <button type="button" onClick={submitEpisode}>Додати серію</button>
+                  </div>
+                ) : null}
+
+                {selectedSeason?.episodes.length ? (
+                  <div className="episode-admin-list">
+                    {selectedSeason.episodes.map((episode) => (
+                      <article key={episode.id}>
+                        <div>
+                          <strong>E{episode.episodeNumber}. {episode.title}</strong>
+                          <span>{episode.airDate ? formatDate(episode.airDate) : 'Дата не вказана'}{episode.duration ? ` · ${episode.duration} хв` : ''}</span>
+                        </div>
+                        <button type="button" onClick={() => deleteEpisode(episode.id)}>Видалити</button>
+                      </article>
+                    ))}
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <p className="muted-text">Спочатку натисніть “Додати в каталог”, потім тут з’явиться форма сезонів і серій.</p>
+            )}
+          </section>
+        ) : null}
       </form>
 
       <section className="admin-list-panel">
@@ -1443,10 +1725,11 @@ function AdminMoviesPanel({ accessToken }: { accessToken: string }) {
             <p className="eyebrow">Каталог</p>
             <h2>Останні записи</h2>
           </div>
-          <button type="button" onClick={loadAdminMovies} disabled={isLoading}>
-            Оновити
-          </button>
         </div>
+        <form className="admin-search-row" onSubmit={(event) => { event.preventDefault(); loadAdminMovies(); }}>
+          <input value={movieQuery} onChange={(event) => setMovieQuery(event.target.value)} placeholder="Пошук у каталозі" />
+          <button type="submit" disabled={isLoading}>{isLoading ? <Spinner /> : 'Знайти'}</button>
+        </form>
 
         <div className="admin-movie-list">
           {movies.map((movie) => (
@@ -1695,7 +1978,7 @@ function AdminPersonsPanel({ accessToken }: { accessToken: string }) {
         <div className="admin-form-grid">
           <label>
             Дата народження
-            <input type="date" value={form.birthDate} onChange={(event) => updatePersonField('birthDate', event.target.value)} />
+            <input max={getTodayInputDate()} type="date" value={form.birthDate} onChange={(event) => updatePersonField('birthDate', event.target.value)} />
           </label>
           <label>
             Місце народження
@@ -1757,8 +2040,161 @@ function AdminPersonsPanel({ accessToken }: { accessToken: string }) {
   );
 }
 
+function AdminTmdbPanel({ accessToken }: { accessToken: string }) {
+  const { notify } = useToast();
+  const [moviePages, setMoviePages] = useState('2');
+  const [tvPages, setTvPages] = useState('1');
+  const [tmdbMovieId, setTmdbMovieId] = useState('');
+  const [result, setResult] = useState<ImportResult | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
+
+  async function runImport(path: string, successMessage: string) {
+    setIsImporting(true);
+
+    try {
+      const importResult = await authedRequest<ImportResult>(path, accessToken, { method: 'POST' });
+      setResult(importResult);
+
+      if (importResult.errorsCount > 0) {
+        notify('Імпорт завершився з помилками. Перевірте результат нижче.', 'error');
+      } else {
+        notify(successMessage, 'success');
+      }
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Не вдалося запустити TMDB імпорт.', 'error');
+    } finally {
+      setIsImporting(false);
+    }
+  }
+
+  function importPopularMovies(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    runImport(`/api/admin/import/tmdb/movies?pages=${encodeURIComponent(moviePages)}`, 'Популярні фільми синхронізовано.');
+  }
+
+  function importPopularTvShows(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    runImport(`/api/admin/import/tmdb/tv-shows?pages=${encodeURIComponent(tvPages)}`, 'Популярні серіали синхронізовано.');
+  }
+
+  function importMovieById(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!tmdbMovieId.trim()) {
+      notify('Введіть TMDB ID фільму.', 'error');
+      return;
+    }
+
+    runImport(`/api/admin/import/tmdb/movie/${encodeURIComponent(tmdbMovieId.trim())}`, 'Фільм з TMDB синхронізовано.');
+  }
+
+  return (
+    <section className="admin-workspace tmdb-workspace">
+      <div className="admin-form tmdb-import-forms">
+        <form onSubmit={importPopularMovies}>
+          <div className="admin-form-head">
+            <div>
+              <p className="eyebrow">TMDB</p>
+              <h2>Популярні фільми</h2>
+            </div>
+          </div>
+          <label>
+            Кількість сторінок
+            <input min="1" type="number" value={moviePages} onChange={(event) => setMoviePages(event.target.value)} />
+          </label>
+          <button className="primary-action" type="submit" disabled={isImporting}>
+            {isImporting ? <Spinner /> : null}
+            Синхронізувати фільми
+          </button>
+        </form>
+
+        <form onSubmit={importPopularTvShows}>
+          <div className="admin-form-head">
+            <div>
+              <p className="eyebrow">TMDB</p>
+              <h2>Популярні серіали</h2>
+            </div>
+          </div>
+          <label>
+            Кількість сторінок
+            <input min="1" type="number" value={tvPages} onChange={(event) => setTvPages(event.target.value)} />
+          </label>
+          <button className="primary-action" type="submit" disabled={isImporting}>
+            {isImporting ? <Spinner /> : null}
+            Синхронізувати серіали
+          </button>
+        </form>
+
+        <form onSubmit={importMovieById}>
+          <div className="admin-form-head">
+            <div>
+              <p className="eyebrow">TMDB</p>
+              <h2>Один фільм</h2>
+            </div>
+          </div>
+          <label>
+            TMDB ID
+            <input min="1" type="number" value={tmdbMovieId} onChange={(event) => setTmdbMovieId(event.target.value)} placeholder="наприклад 550" />
+          </label>
+          <button className="primary-action" type="submit" disabled={isImporting}>
+            {isImporting ? <Spinner /> : null}
+            Синхронізувати за ID
+          </button>
+        </form>
+      </div>
+
+      <section className="admin-list-panel tmdb-result-panel">
+        <div className="admin-form-head">
+          <div>
+            <p className="eyebrow">Результат</p>
+            <h2>Останній запуск</h2>
+          </div>
+        </div>
+
+        {result ? (
+          <>
+            <div className="tmdb-result-grid">
+              <article>
+                <strong>{result.fetched}</strong>
+                <span>отримано</span>
+              </article>
+              <article>
+                <strong>{result.added}</strong>
+                <span>додано</span>
+              </article>
+              <article>
+                <strong>{result.updated}</strong>
+                <span>оновлено</span>
+              </article>
+              <article>
+                <strong>{result.skipped}</strong>
+                <span>пропущено</span>
+              </article>
+              <article>
+                <strong>{result.errorsCount}</strong>
+                <span>помилок</span>
+              </article>
+            </div>
+
+            {result.errors.length ? (
+              <div className="tmdb-error-list">
+                {result.errors.map((error) => (
+                  <p key={error}>{error}</p>
+                ))}
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <p className="muted-text">Запустіть синхронізацію, щоб побачити статистику імпорту.</p>
+        )}
+      </section>
+    </section>
+  );
+}
+
 function ProfilePage({ accessToken, user }: { accessToken: string; user: AuthUser }) {
   const location = useLocation();
+  const { isBusy, handleLogout } = useContext(HeaderAuthContext);
   const [stats, setStats] = useState<ProfileStats | null>(null);
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
   const [watched, setWatched] = useState<WatchlistItem[]>([]);
@@ -1813,7 +2249,7 @@ function ProfilePage({ accessToken, user }: { accessToken: string; user: AuthUse
           <div className="profile-top-stats">
             <article>
               <strong>{stats?.watchedCount ?? 0}</strong>
-              <span>Фільмів</span>
+              <span>Переглянуто</span>
             </article>
             <article>
               <strong>{stats?.watchlistCount ?? 0}</strong>
@@ -1885,6 +2321,25 @@ function ProfilePage({ accessToken, user }: { accessToken: string; user: AuthUse
         {activeTab === 'profile' ? (
           <>
             <section className="profile-panel">
+              <div className="profile-account-head">
+                <SectionTitle title="Інформація про акаунт" />
+                <button className="danger-action" disabled={isBusy} type="button" onClick={handleLogout}>
+                  Вийти
+                </button>
+              </div>
+              <div className="account-info-grid">
+                <article>
+                  <span>Ім’я</span>
+                  <strong>{user.username}</strong>
+                </article>
+                <article>
+                  <span>Email</span>
+                  <strong>{user.email}</strong>
+                </article>
+              </div>
+            </section>
+
+            <section className="profile-panel">
               <SectionTitle title="Статистика" />
               <div className="profile-stats-grid">
                 <article>
@@ -1916,8 +2371,191 @@ function ProfilePage({ accessToken, user }: { accessToken: string; user: AuthUse
             <ProfileMovieSection title="Останні додані" items={recentItems} emptyText="Додавайте фільми у “Хочу переглянути” або переглянуте, і вони з’являться тут." />
           </>
         ) : null}
+      </section>
 
-        {Number(user.role) === 1 ? <AdminReviewsPanel accessToken={accessToken} /> : null}
+      <SiteFooter />
+    </main>
+  );
+}
+
+function PublicProfilePage() {
+  const { id } = useParams();
+  const { notify } = useToast();
+  const [profile, setProfile] = useState<PublicUserProfile | null>(null);
+  const [lists, setLists] = useState<MovieListSummary[]>([]);
+  const [reviews, setReviews] = useState<PublicUserReview[]>([]);
+  const [selectedListId, setSelectedListId] = useState('');
+  const [selectedList, setSelectedList] = useState<MovieListDetails | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    if (!id) {
+      return;
+    }
+
+    const controller = new AbortController();
+    setIsLoading(true);
+    setMessage('');
+    setSelectedList(null);
+
+    Promise.all([
+      fetchJson<PublicUserProfile>(`/api/users/${id}`, { signal: controller.signal }),
+      fetchJson<MovieListSummary[]>(`/api/users/${id}/lists`, { signal: controller.signal }),
+      fetchJson<PublicUserReview[]>(`/api/users/${id}/reviews`, { signal: controller.signal })
+    ])
+      .then(([profileResult, listsResult, reviewsResult]) => {
+        setProfile(profileResult);
+        setLists(listsResult);
+        setReviews(reviewsResult);
+        setSelectedListId(listsResult[0]?.id ?? '');
+      })
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          return;
+        }
+
+        setProfile(null);
+        setLists([]);
+        setReviews([]);
+        setSelectedListId('');
+        setMessage(error instanceof Error ? error.message : 'Не вдалося завантажити профіль.');
+      })
+      .finally(() => setIsLoading(false));
+
+    return () => controller.abort();
+  }, [id]);
+
+  useEffect(() => {
+    if (!id || !selectedListId) {
+      setSelectedList(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    fetchJson<MovieListDetails>(`/api/users/${id}/lists/${selectedListId}`, { signal: controller.signal })
+      .then(setSelectedList)
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          return;
+        }
+
+        setSelectedList(null);
+        notify(error instanceof Error ? error.message : 'Не вдалося завантажити список.', 'error');
+      });
+
+    return () => controller.abort();
+  }, [id, notify, selectedListId]);
+
+  return (
+    <main className="page-shell profile-page-shell">
+      <SiteHeader />
+
+      <section className="profile-page public-profile-page" aria-label="Публічний профіль користувача">
+        {isLoading ? <StatusMessage>Завантаження профілю...</StatusMessage> : null}
+        {message ? <StatusMessage tone="danger">{message}</StatusMessage> : null}
+
+        {profile ? (
+          <>
+            <header className="profile-hero-card">
+              <div className="profile-avatar-large">
+                {profile.avatarUrl ? <img src={profile.avatarUrl} alt="" /> : <span>{getInitials(profile.username)}</span>}
+              </div>
+              <div>
+                <p className="eyebrow">Публічний профіль</p>
+                <h1>{profile.username}</h1>
+                <p>На CinemaCity з {formatDate(profile.createdAt)}</p>
+              </div>
+              <div className="profile-top-stats">
+                <article>
+                  <strong>{profile.publicListsCount}</strong>
+                  <span>Публічних списків</span>
+                </article>
+                <article>
+                  <strong>{profile.approvedReviewsCount}</strong>
+                  <span>Рецензій</span>
+                </article>
+                <article>
+                  <strong>{lists.reduce((sum, list) => sum + list.itemsCount, 0)}</strong>
+                  <span>Назв у списках</span>
+                </article>
+              </div>
+            </header>
+
+            <section className="profile-panel list-manager">
+              <SectionTitle title="Публічні списки" />
+              {lists.length ? (
+                <div className="list-layout public-list-layout">
+                  <aside className="list-sidebar" aria-label="Публічні списки користувача">
+                    {lists.map((list) => (
+                      <button className={selectedListId === list.id ? 'active' : ''} key={list.id} type="button" onClick={() => setSelectedListId(list.id)}>
+                        <strong>{list.name}</strong>
+                        <span>{list.itemsCount} назв</span>
+                      </button>
+                    ))}
+                  </aside>
+
+                  <section className="list-details">
+                    {selectedList ? (
+                      <>
+                        <div className="admin-form-head">
+                          <div>
+                            <p className="eyebrow">{selectedList.items.length} назв</p>
+                            <h2>{selectedList.name}</h2>
+                            {selectedList.description ? <p>{selectedList.description}</p> : null}
+                          </div>
+                        </div>
+                        {selectedList.items.length ? (
+                          <div className="profile-poster-grid">
+                            {selectedList.items.map((item) => (
+                              <MovieCardLink key={item.id} movie={{ ...item, id: item.movieId }} />
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="muted-text">У цьому публічному списку поки немає назв.</p>
+                        )}
+                      </>
+                    ) : (
+                      <p className="muted-text">Оберіть список, щоб переглянути назви.</p>
+                    )}
+                  </section>
+                </div>
+              ) : (
+                <p className="muted-text">У користувача немає публічних списків.</p>
+              )}
+            </section>
+
+            <section className="profile-panel">
+              <SectionTitle title="Рецензії" />
+              {reviews.length ? (
+                <div className="public-review-list">
+                  {reviews.map((review) => (
+                    <article className="public-review-card" key={review.id}>
+                      <Link className="public-review-movie" to={`/movies/${review.movieId}`}>
+                        <span>
+                          {review.moviePosterUrl ? <img src={review.moviePosterUrl} alt="" loading="lazy" /> : getInitials(review.movieTitle)}
+                        </span>
+                        <div>
+                          <strong>{review.movieTitle}</strong>
+                          <small>
+                            {formatContentType(review.contentType)} · {review.releaseYear}
+                          </small>
+                        </div>
+                      </Link>
+                      <div className="public-review-copy">
+                        <span>{formatDate(review.createdAt)} · ♥ {review.likesCount}</span>
+                        {review.isSpoiler ? <small>Містить спойлери</small> : null}
+                        <p>{review.content}</p>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p className="muted-text">Опублікованих рецензій поки немає.</p>
+              )}
+            </section>
+          </>
+        ) : null}
       </section>
 
       <SiteFooter />
@@ -2172,20 +2810,42 @@ function AdminReviewsPanel({ accessToken }: { accessToken: string }) {
     return () => controller.abort();
   }, [accessToken, statusFilter]);
 
-  async function moderateReview(reviewId: string, action: 'approve' | 'reject') {
+  async function approveReview(reviewId: string) {
     setMessage('');
 
     try {
-      await authedRequest<ReviewResponse>(`/api/admin/reviews/${reviewId}/${action}`, accessToken, {
+      const updatedReview = await authedRequest<ReviewResponse>(`/api/admin/reviews/${reviewId}/approve`, accessToken, {
         method: 'PUT',
-        body: JSON.stringify(action === 'reject' ? { rejectionReason: 'Не відповідає правилам публікації.' } : {})
+        body: JSON.stringify({})
       });
-      setReviews((current) => current.filter((review) => review.id !== reviewId));
-      const successMessage = action === 'approve' ? 'Рецензію опубліковано.' : 'Рецензію відхилено.';
-      setMessage(successMessage);
-      notify(successMessage, 'success');
+      setReviews((current) => {
+        if (statusFilter === 'all') {
+          return current.map((review) => (review.id === reviewId ? updatedReview : review));
+        }
+
+        return normalizeReviewStatus(updatedReview.status) === statusFilter
+          ? current.map((review) => (review.id === reviewId ? updatedReview : review))
+          : current.filter((review) => review.id !== reviewId);
+      });
+      setMessage('Рецензію опубліковано.');
+      notify('Рецензію опубліковано.', 'success');
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Не вдалося змінити статус рецензії.';
+      setMessage(errorMessage);
+      notify(errorMessage, 'error');
+    }
+  }
+
+  async function deleteModeratedReview(reviewId: string) {
+    setMessage('');
+
+    try {
+      await authedRequest(`/api/reviews/${reviewId}`, accessToken, { method: 'DELETE' });
+      setReviews((current) => current.filter((review) => review.id !== reviewId));
+      setMessage('Рецензію видалено.');
+      notify('Рецензію видалено.', 'success');
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Не вдалося видалити рецензію.';
       setMessage(errorMessage);
       notify(errorMessage, 'error');
     }
@@ -2201,7 +2861,6 @@ function AdminReviewsPanel({ accessToken }: { accessToken: string }) {
         <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} aria-label="Статус рецензій">
           <option value="Pending">Очікують</option>
           <option value="Approved">Опубліковані</option>
-          <option value="Rejected">Відхилені</option>
           <option value="all">Усі</option>
         </select>
       </div>
@@ -2220,11 +2879,13 @@ function AdminReviewsPanel({ accessToken }: { accessToken: string }) {
               <p>{review.content}</p>
               {review.rejectionReason ? <small>{review.rejectionReason}</small> : null}
               <footer>
-                <button type="button" onClick={() => moderateReview(review.id, 'approve')} disabled={review.status === 'Approved'}>
-                  Схвалити
-                </button>
-                <button type="button" onClick={() => moderateReview(review.id, 'reject')} disabled={review.status === 'Rejected'}>
-                  Відхилити
+                {normalizeReviewStatus(review.status) !== 'Approved' ? (
+                  <button type="button" onClick={() => approveReview(review.id)}>
+                    Опублікувати
+                  </button>
+                ) : null}
+                <button className="danger-action" type="button" onClick={() => deleteModeratedReview(review.id)}>
+                  Видалити
                 </button>
               </footer>
             </article>
@@ -2355,7 +3016,7 @@ function SearchPage() {
     setIsLoading(true);
     setError('');
 
-    fetch(`${apiUrl}/api/search?${searchParams}`, { signal: controller.signal })
+    apiFetch(`${apiUrl}/api/search?${searchParams}`, { signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) {
           throw new Error('Не вдалося виконати пошук.');
@@ -2484,7 +3145,7 @@ function CatalogPage() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    fetch(`${apiUrl}/api/genres`)
+    apiFetch(`${apiUrl}/api/genres`)
       .then((response) => (response.ok ? response.json() : []))
       .then((data: Genre[]) => setGenres(data))
       .catch(() => setGenres([]));
@@ -2507,7 +3168,7 @@ function CatalogPage() {
     setIsLoading(true);
     setError('');
 
-    fetch(`${apiUrl}/api/movies?${params}`, { signal: controller.signal })
+    apiFetch(`${apiUrl}/api/movies?${params}`, { signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) {
           throw new Error('Не вдалося завантажити каталог.');
@@ -2674,6 +3335,7 @@ function CatalogPage() {
 }
 
 function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: AuthUser | null }) {
+  const { notify } = useToast();
   const { id } = useParams();
   const [movie, setMovie] = useState<MovieDetails | null>(null);
   const [similar, setSimilar] = useState<MovieCard[]>([]);
@@ -2691,15 +3353,16 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
   const [error, setError] = useState('');
-  const [actionMessage, setActionMessage] = useState('');
-  const [movieRating, setMovieRating] = useState('8');
-  const [ratingDraft, setRatingDraft] = useState('8');
+  const [movieRating, setMovieRating] = useState('0');
+  const [ratingDraft, setRatingDraft] = useState('0');
   const [isRatingModalOpen, setIsRatingModalOpen] = useState(false);
+  const [isCastExpanded, setIsCastExpanded] = useState(false);
   const [episodeRatings, setEpisodeRatings] = useState<Record<string, string>>({});
   const [activeSeasonId, setActiveSeasonId] = useState('');
   const [selectedEpisodeId, setSelectedEpisodeId] = useState('');
   const [reviewContent, setReviewContent] = useState('');
   const [reviewSpoiler, setReviewSpoiler] = useState(false);
+  const [reviewError, setReviewError] = useState('');
   const [editingReviewId, setEditingReviewId] = useState('');
   const [editingReviewContent, setEditingReviewContent] = useState('');
   const [editingReviewSpoiler, setEditingReviewSpoiler] = useState(false);
@@ -2714,15 +3377,18 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
     setError('');
 
     Promise.all([
-      fetch(`${apiUrl}/api/movies/${id}`, { signal: controller.signal }).then(async (response) => {
+      apiFetch(`${apiUrl}/api/movies/${id}`, { signal: controller.signal }).then(async (response) => {
         if (!response.ok) throw new Error('Фільм не знайдено.');
         return (await response.json()) as MovieDetails;
       }),
-      fetch(`${apiUrl}/api/movies/${id}/similar`, { signal: controller.signal }).then(async (response) => {
+      apiFetch(`${apiUrl}/api/movies/${id}/similar`, { signal: controller.signal }).then(async (response) => {
         if (!response.ok) return [];
         return (await response.json()) as MovieCard[];
       }),
-      fetch(`${apiUrl}/api/movies/${id}/reviews`, { signal: controller.signal }).then(async (response) => {
+      apiFetch(`${apiUrl}/api/movies/${id}/reviews`, {
+        signal: controller.signal,
+        headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined
+      }).then(async (response) => {
         if (!response.ok) return [];
         return (await response.json()) as ReviewResponse[];
       }),
@@ -2733,7 +3399,10 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
       .then(async ([movieResult, similarResult, reviewResult, stateResult]) => {
         const seasonResult =
           formatContentType(movieResult.contentType) === 'Серіал'
-            ? await fetch(`${apiUrl}/api/movies/${id}/seasons`, { signal: controller.signal }).then(async (response) => {
+            ? await apiFetch(`${apiUrl}/api/movies/${id}/seasons`, {
+                signal: controller.signal,
+                headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined
+              }).then(async (response) => {
                 if (!response.ok) return [];
                 return (await response.json()) as SeasonDetails[];
               })
@@ -2741,7 +3410,7 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
 
         const commentsResult = await Promise.all(
           reviewResult.map(async (review) => {
-            const comments = await fetch(`${apiUrl}/api/reviews/${review.id}/comments`, { signal: controller.signal }).then(async (response) => {
+            const comments = await apiFetch(`${apiUrl}/api/reviews/${review.id}/comments`, { signal: controller.signal }).then(async (response) => {
               if (!response.ok) return [];
               return (await response.json()) as CommentResponse[];
             });
@@ -2751,13 +3420,21 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
         );
 
         setMovie(movieResult);
+        setIsCastExpanded(false);
         setSimilar(similarResult);
         setReviews(reviewResult);
         setSeasons(seasonResult);
         setCommentsByReview(Object.fromEntries(commentsResult));
         setUserState(stateResult);
-        setMovieRating(stateResult?.rating?.score ? String(stateResult.rating.score) : '8');
-        setRatingDraft(stateResult?.rating?.score ? String(stateResult.rating.score) : '8');
+        setMovieRating(stateResult?.rating?.score ? String(stateResult.rating.score) : '0');
+        setRatingDraft(stateResult?.rating?.score ? String(stateResult.rating.score) : '0');
+        setEpisodeRatings(Object.fromEntries(
+          seasonResult.flatMap((season) =>
+            season.episodes
+              .filter((episode) => episode.userRating)
+              .map((episode) => [episode.id, String(episode.userRating!.score)])
+          )
+        ));
         setActiveSeasonId(seasonResult[0]?.id || '');
         setSelectedEpisodeId(seasonResult[0]?.episodes[0]?.id || '');
       })
@@ -2795,36 +3472,41 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
 
   async function submitRating(target: { movieId?: string; episodeId?: string }, scoreValue: string) {
     if (!accessToken) {
-      setActionMessage('Щоб поставити оцінку, увійдіть в акаунт.');
+      notify('Щоб поставити оцінку, увійдіть в акаунт.', 'error');
       return false;
     }
 
     const score = Number(scoreValue);
 
     if (!Number.isFinite(score) || score < 1 || score > 10) {
-      setActionMessage('Оцінка має бути від 1 до 10.');
+      notify('Оцінка має бути від 1 до 10.', 'error');
       return false;
     }
 
     setIsSubmitting(true);
-    setActionMessage('');
 
     try {
       const existingMovieRatingId = target.movieId ? userState?.rating?.id : undefined;
+      const isEpisodeRating = Boolean(target.episodeId);
       const response = await authedRequest<RatingResponse>(existingMovieRatingId ? `/api/ratings/${existingMovieRatingId}` : '/api/ratings', accessToken, {
         method: existingMovieRatingId ? 'PUT' : 'POST',
         body: JSON.stringify(existingMovieRatingId ? { score } : { ...target, score })
       });
-      setUserState((current) => (target.movieId ? { ...(current ?? {}), rating: { id: response.id, score: response.score } } : current));
+      setUserState((current) => (target.movieId || isEpisodeRating ? {
+        ...(current ?? {}),
+        rating: target.movieId ? { id: response.id, score: response.score } : current?.rating,
+        watchlistStatus: 'Watched',
+        addedAt: current?.addedAt ?? new Date().toISOString()
+      } : current));
       if (target.movieId) {
         setMovieRating(String(response.score));
         setRatingDraft(String(response.score));
       }
       setRefreshTick((value) => value + 1);
-      setActionMessage('Оцінку збережено.');
+      notify(isEpisodeRating ? 'Серію оцінено. Серіал додано в “Переглянуто”.' : 'Оцінку збережено. Фільм додано в “Переглянуто”.', 'success');
       return true;
     } catch (requestError) {
-      setActionMessage(requestError instanceof Error ? requestError.message : 'Не вдалося зберегти оцінку.');
+      notify(requestError instanceof Error ? requestError.message : 'Не вдалося зберегти оцінку.', 'error');
       return false;
     } finally {
       setIsSubmitting(false);
@@ -2844,7 +3526,7 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
     if (!movie) return;
 
     if (!accessToken || !user) {
-      setActionMessage('Щоб додати фільм у власний список, увійдіть в акаунт.');
+      notify('Щоб додати фільм у власний список, увійдіть в акаунт.', 'error');
       return;
     }
 
@@ -2858,20 +3540,24 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
     if (!movie) return;
 
     if (!accessToken || !user) {
-      setActionMessage('Щоб додати фільм у “Хочу переглянути”, увійдіть в акаунт.');
+      notify('Щоб додати фільм у “Хочу переглянути”, увійдіть в акаунт.', 'error');
       return;
     }
 
     setIsSubmitting(true);
-    setActionMessage('');
 
     try {
       const currentStatus = normalizeWatchlistStatus(userState?.watchlistStatus);
 
+      if (currentStatus === 'Watched') {
+        notify('Цей фільм уже у “Переглянуто”.', 'info');
+        return;
+      }
+
       if (currentStatus === 'Watchlist') {
         await authedRequest(`/api/profile/watchlist/${movie.id}`, accessToken, { method: 'DELETE' });
         setUserState((current) => ({ ...(current ?? {}), watchlistStatus: null, addedAt: null }));
-        setActionMessage('Видалено з “Хочу переглянути”.');
+        notify('Видалено з “Хочу переглянути”.', 'success');
         return;
       }
 
@@ -2880,9 +3566,9 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
         body: JSON.stringify({ movieId: movie.id, status: 0 })
       });
       setUserState((current) => ({ ...(current ?? {}), watchlistStatus: watchlistItem.status, addedAt: watchlistItem.addedAt }));
-      setActionMessage('Додано в “Хочу переглянути”.');
+      notify('Додано в “Хочу переглянути”.', 'success');
     } catch (requestError) {
-      setActionMessage(requestError instanceof Error ? requestError.message : 'Не вдалося оновити “Хочу переглянути”.');
+      notify(requestError instanceof Error ? requestError.message : 'Не вдалося оновити “Хочу переглянути”.', 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -2890,13 +3576,13 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
 
   async function createModalList() {
     if (!accessToken) {
-      setActionMessage('Щоб створити список, увійдіть в акаунт.');
+      notify('Щоб створити список, увійдіть в акаунт.', 'error');
       return;
     }
 
     const trimmedName = newModalListName.trim();
     if (!trimmedName) {
-      setActionMessage('Вкажіть назву списку.');
+      notify('Вкажіть назву списку.', 'error');
       return;
     }
 
@@ -2910,7 +3596,7 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
       setSelectedModalListIds((current) => [...new Set([...current, created.id])]);
       setNewModalListName('');
     } catch (requestError) {
-      setActionMessage(requestError instanceof Error ? requestError.message : 'Не вдалося створити список.');
+      notify(requestError instanceof Error ? requestError.message : 'Не вдалося створити список.', 'error');
     }
   }
 
@@ -2920,7 +3606,6 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
     }
 
     setIsSubmitting(true);
-    setActionMessage('');
 
     try {
       const existingIds = new Set(userState?.lists?.map((list) => list.id) ?? []);
@@ -2930,7 +3615,7 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
         .map((list) => ({ id: list.id, name: list.name }));
 
       if (!selectedMemberships.length) {
-        setActionMessage('Оберіть власний список або створіть новий.');
+        notify('Оберіть власний список або створіть новий.', 'error');
         return;
       }
 
@@ -2968,10 +3653,10 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
           };
         })
       );
-      setActionMessage(`Додано у списки: ${selectedMemberships.map((list) => `“${list.name}”`).join(', ')}.`);
+      notify(`Додано у списки: ${selectedMemberships.map((list) => `“${list.name}”`).join(', ')}.`, 'success');
       setIsListModalOpen(false);
     } catch (requestError) {
-      setActionMessage(requestError instanceof Error ? requestError.message : 'Не вдалося оновити списки.');
+      notify(requestError instanceof Error ? requestError.message : 'Не вдалося оновити списки.', 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -2983,24 +3668,35 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
     if (!movie) return;
 
     if (!accessToken) {
-      setActionMessage('Щоб написати рецензію, увійдіть в акаунт.');
+      notify('Щоб написати рецензію, увійдіть в акаунт.', 'error');
+      return;
+    }
+
+    const trimmedReview = reviewContent.trim();
+    if (trimmedReview.length < 10) {
+      setReviewError('Рецензія має містити щонайменше 10 символів.');
+      return;
+    }
+
+    if (trimmedReview.length > 4000) {
+      setReviewError('Рецензія має містити не більше 4000 символів.');
       return;
     }
 
     setIsSubmitting(true);
-    setActionMessage('');
+    setReviewError('');
 
     try {
       await authedRequest<ReviewResponse>('/api/reviews', accessToken, {
         method: 'POST',
-        body: JSON.stringify({ movieId: movie.id, content: reviewContent, isSpoiler: reviewSpoiler })
+        body: JSON.stringify({ movieId: movie.id, content: trimmedReview, isSpoiler: reviewSpoiler })
       });
       setReviewContent('');
       setReviewSpoiler(false);
       setRefreshTick((value) => value + 1);
-      setActionMessage('Рецензію відправлено на модерацію.');
+      notify('Рецензію відправлено на модерацію.', 'success');
     } catch (requestError) {
-      setActionMessage(requestError instanceof Error ? requestError.message : 'Не вдалося відправити рецензію.');
+      setReviewError(requestError instanceof Error ? requestError.message : 'Не вдалося відправити рецензію.');
     } finally {
       setIsSubmitting(false);
     }
@@ -3016,7 +3712,6 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
     if (!accessToken) return;
 
     setIsSubmitting(true);
-    setActionMessage('');
 
     try {
       await authedRequest<ReviewResponse>(`/api/reviews/${reviewId}`, accessToken, {
@@ -3025,9 +3720,9 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
       });
       setEditingReviewId('');
       setRefreshTick((value) => value + 1);
-      setActionMessage('Рецензію оновлено.');
+      notify('Рецензію оновлено.', 'success');
     } catch (requestError) {
-      setActionMessage(requestError instanceof Error ? requestError.message : 'Не вдалося оновити рецензію.');
+      notify(requestError instanceof Error ? requestError.message : 'Не вдалося оновити рецензію.', 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -3037,14 +3732,13 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
     if (!accessToken) return;
 
     setIsSubmitting(true);
-    setActionMessage('');
 
     try {
       await authedRequest(`/api/reviews/${reviewId}`, accessToken, { method: 'DELETE' });
       setRefreshTick((value) => value + 1);
-      setActionMessage('Рецензію видалено.');
+      notify('Рецензію видалено.', 'success');
     } catch (requestError) {
-      setActionMessage(requestError instanceof Error ? requestError.message : 'Не вдалося видалити рецензію.');
+      notify(requestError instanceof Error ? requestError.message : 'Не вдалося видалити рецензію.', 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -3052,21 +3746,28 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
 
   async function likeReview(reviewId: string) {
     if (!accessToken) {
-      setActionMessage('Щоб лайкнути рецензію, увійдіть в акаунт.');
+      notify('Щоб лайкнути рецензію, увійдіть в акаунт.', 'error');
       return;
     }
 
     try {
-      const response = await authedRequest<ReviewResponse>(`/api/reviews/${reviewId}/like`, accessToken, { method: 'POST' });
-      setReviews((current) => current.map((review) => (review.id === reviewId ? { ...review, likesCount: response.likesCount } : review)));
+      const currentReview = reviews.find((review) => review.id === reviewId);
+      const response = await authedRequest<ReviewResponse>(`/api/reviews/${reviewId}/like`, accessToken, {
+        method: currentReview?.isLikedByCurrentUser ? 'DELETE' : 'POST'
+      });
+      setReviews((current) => current.map((review) => (review.id === reviewId ? {
+        ...review,
+        likesCount: response.likesCount,
+        isLikedByCurrentUser: response.isLikedByCurrentUser
+      } : review)));
     } catch (requestError) {
-      setActionMessage(requestError instanceof Error ? requestError.message : 'Не вдалося лайкнути рецензію.');
+      notify(requestError instanceof Error ? requestError.message : 'Не вдалося оновити лайк рецензії.', 'error');
     }
   }
 
   async function submitComment(reviewId: string) {
     if (!accessToken) {
-      setActionMessage('Щоб коментувати, увійдіть в акаунт.');
+      notify('Щоб коментувати, увійдіть в акаунт.', 'error');
       return;
     }
 
@@ -3081,7 +3782,7 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
       setCommentInputs((current) => ({ ...current, [reviewId]: '' }));
       setCommentsByReview((current) => ({ ...current, [reviewId]: [...(current[reviewId] ?? []), comment] }));
     } catch (requestError) {
-      setActionMessage(requestError instanceof Error ? requestError.message : 'Не вдалося додати коментар.');
+      notify(requestError instanceof Error ? requestError.message : 'Не вдалося додати коментар.', 'error');
     }
   }
 
@@ -3092,7 +3793,7 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
       await authedRequest(`/api/comments/${commentId}`, accessToken, { method: 'DELETE' });
       setCommentsByReview((current) => ({ ...current, [reviewId]: (current[reviewId] ?? []).filter((comment) => comment.id !== commentId) }));
     } catch (requestError) {
-      setActionMessage(requestError instanceof Error ? requestError.message : 'Не вдалося видалити коментар.');
+      notify(requestError instanceof Error ? requestError.message : 'Не вдалося видалити коментар.', 'error');
     }
   }
 
@@ -3100,9 +3801,13 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
   const selectedModalLists = customLists.filter((list) => selectedModalListIds.includes(list.id));
   const activeSeason = seasons.find((season) => season.id === activeSeasonId) ?? seasons[0] ?? null;
   const selectedEpisode = activeSeason?.episodes.find((episode) => episode.id === selectedEpisodeId) ?? activeSeason?.episodes[0] ?? null;
-  const seasonAverageRating = activeSeason?.episodes.length
-    ? activeSeason.episodes.reduce((sum, episode) => sum + Number(episode.averageRating), 0) / activeSeason.episodes.length
+  const ratedSeasonEpisodes = activeSeason?.episodes.filter((episode) => episode.ratingsCount > 0) ?? [];
+  const seasonRatingsCount = ratedSeasonEpisodes.reduce((sum, episode) => sum + episode.ratingsCount, 0);
+  const seasonAverageRating = ratedSeasonEpisodes.length
+    ? ratedSeasonEpisodes.reduce((sum, episode) => sum + Number(episode.averageRating), 0) / ratedSeasonEpisodes.length
     : 0;
+  const visibleCast = movie ? (isCastExpanded ? movie.cast : movie.cast.slice(0, 5)) : [];
+  const hiddenCastCount = movie ? Math.max(0, movie.cast.length - visibleCast.length) : 0;
 
   return (
     <main className="page-shell">
@@ -3142,7 +3847,7 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
                     disabled={isSubmitting}
                     type="button"
                     onClick={() => {
-                      setRatingDraft(movieRating);
+                      setRatingDraft(userState?.rating ? movieRating : '0');
                       setIsRatingModalOpen(true);
                     }}
                   >
@@ -3154,11 +3859,11 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
                 )}
               </article>
               <article>
-                <span>СПИСОК</span>
+                <span>ВЛАСНІ СПИСКИ</span>
                 {user ? (
-                  <button className="score-action-button" disabled={isSubmitting} type="button" onClick={toggleWatchlist}>
-                    <strong>{currentWatchlistStatus === 'Watchlist' ? '✓ Хочу переглянути' : 'Додати'}</strong>
-                    <small>{currentWatchlistStatus === 'Watchlist' ? 'Натисніть, щоб прибрати' : 'У “Хочу переглянути”'}</small>
+                  <button className="score-action-button" disabled={isSubmitting} type="button" onClick={openListModal}>
+                    <strong>{userState?.lists?.length ? `✓ У списках: ${userState.lists.length}` : 'Додати в список'}</strong>
+                    <small>{userState?.lists?.length ? 'Змінити власні списки' : 'Відкрити вікно списків'}</small>
                   </button>
                 ) : (
                   <Link to="/auth">+ Увійти</Link>
@@ -3170,13 +3875,19 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
           <div className="movie-media-layout">
             <div className="movie-poster-large">
               <button
-                className={userState?.lists?.length ? 'active' : ''}
+                className={currentWatchlistStatus ? 'active' : ''}
                 disabled={isSubmitting}
                 type="button"
-                onClick={openListModal}
-                aria-label="Відкрити власні списки"
+                onClick={toggleWatchlist}
+                aria-label={
+                  currentWatchlistStatus === 'Watched'
+                    ? 'Фільм уже у переглянутому'
+                    : currentWatchlistStatus === 'Watchlist'
+                      ? 'Прибрати з хочу переглянути'
+                      : 'Додати у хочу переглянути'
+                }
               >
-                {userState?.lists?.length ? '✓' : '+'}
+                {currentWatchlistStatus ? '✓' : '+'}
               </button>
               {movie.posterUrl ? <img src={movie.posterUrl} alt="" /> : <span>{getInitials(movie.title)}</span>}
             </div>
@@ -3207,21 +3918,19 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
             ))}
           </div>
 
-          {actionMessage ? <StatusMessage>{actionMessage}</StatusMessage> : null}
-
           <div className="details-grid">
             <section>
               <SectionTitle title="Деталі" />
               <p className="movie-description-panel">{movie.description || 'Опис для цієї назви ще не додано.'}</p>
-              <TagList title="Країни" items={movie.countries.map((item) => item.name)} />
-              <TagList title="Мови" items={movie.languages.map((item) => item.name)} />
+              <TagList title="Країни" items={movie.countries.map((item) => localizeCountryName(item.name))} />
+              <TagList title="Мови" items={movie.languages.map((item) => localizeLanguageName(item.name))} />
             </section>
 
             <section>
               <SectionTitle title="Акторський склад" />
               {movie.cast.length ? (
                 <div className="cast-list">
-                  {movie.cast.map((cast) => (
+                  {visibleCast.map((cast) => (
                     <article key={cast.id}>
                       <div className="cast-photo">
                         {cast.photoUrl ? <img src={cast.photoUrl} alt="" loading="lazy" /> : <span>{getInitials(cast.fullName)}</span>}
@@ -3235,6 +3944,11 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
                       </div>
                     </article>
                   ))}
+                  {movie.cast.length > 5 ? (
+                    <button className="cast-toggle" type="button" onClick={() => setIsCastExpanded((value) => !value)}>
+                      {isCastExpanded ? 'Згорнути список' : `Показати ще ${hiddenCastCount}`}
+                    </button>
+                  ) : null}
                 </div>
               ) : (
                 <p className="muted-text">Склад ще не додано.</p>
@@ -3270,8 +3984,8 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
                   {activeSeason ? (
                     <>
                       <p className="season-summary">
-                        S{activeSeason.seasonNumber} Епізоди · ★ {formatRating(seasonAverageRating)} середня · з{' '}
-                        {activeSeason.episodes.reduce((sum, episode) => sum + episode.ratingsCount, 0)} оцінок епізодів
+                        S{activeSeason.seasonNumber} Епізоди · ★ {seasonRatingsCount ? formatRating(seasonAverageRating) : '—'} середня · з{' '}
+                        {seasonRatingsCount} оцінок епізодів
                       </p>
 
                       {activeSeason.episodes.length ? (
@@ -3283,18 +3997,19 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
                           >
                             <div className="season-average-line" />
                             {activeSeason.episodes.map((episode) => {
-                              const rating = Math.max(0, Math.min(10, Number(episode.averageRating)));
+                              const hasRating = episode.ratingsCount > 0;
+                              const rating = hasRating ? Math.max(0, Math.min(10, Number(episode.averageRating))) : 0;
 
                               return (
                                 <button
-                                  className={episode.id === selectedEpisode?.id ? 'active' : ''}
+                                  className={[episode.id === selectedEpisode?.id ? 'active' : '', hasRating ? '' : 'no-rating'].filter(Boolean).join(' ')}
                                   key={episode.id}
                                   style={{ '--episode-rating': String(rating) } as React.CSSProperties}
                                   type="button"
                                   onClick={() => setSelectedEpisodeId(episode.id)}
-                                  aria-label={`Епізод ${episode.episodeNumber}, рейтинг ${formatRating(episode.averageRating)}`}
+                                  aria-label={`Епізод ${episode.episodeNumber}, рейтинг ${hasRating ? formatRating(episode.averageRating) : 'без оцінок'}`}
                                 >
-                                  <strong>{formatRating(episode.averageRating)}</strong>
+                                  <strong>{hasRating ? formatRating(episode.averageRating) : '—'}</strong>
                                   <span>E{episode.episodeNumber}</span>
                                 </button>
                               );
@@ -3313,19 +4028,26 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
                                 </span>
                                 <h3>{selectedEpisode.title}</h3>
                                 <p>{selectedEpisode.description || 'Опис серії ще не додано.'}</p>
-                                <strong>★ {formatRating(selectedEpisode.averageRating)} ({selectedEpisode.ratingsCount})</strong>
-                                {user ? (
+                                <strong>
+                                  ★ {selectedEpisode.ratingsCount > 0 ? formatRating(selectedEpisode.averageRating) : '—'} ({selectedEpisode.ratingsCount})
+                                </strong>
+                                {user && selectedEpisode.userRating ? (
+                                  <div className="episode-user-rating">
+                                    <span>Ваша оцінка</span>
+                                    <strong>★ {formatRating(selectedEpisode.userRating.score)}/10</strong>
+                                  </div>
+                                ) : user ? (
                                   <div className="episode-star-rating">
                                     <span>Ваша оцінка:</span>
                                     <StarRatingInput
-                                      value={Number(episodeRatings[selectedEpisode.id] ?? '8')}
+                                      value={Number(episodeRatings[selectedEpisode.id] ?? '0')}
                                       onChange={(value) => setEpisodeRatings((current) => ({ ...current, [selectedEpisode.id]: String(value) }))}
                                     />
                                     <button
                                       className="episode-rate-submit"
-                                      disabled={isSubmitting}
+                                      disabled={isSubmitting || Number(episodeRatings[selectedEpisode.id] ?? '0') < 1}
                                       type="button"
-                                      onClick={() => submitRating({ episodeId: selectedEpisode.id }, episodeRatings[selectedEpisode.id] ?? '8')}
+                                      onClick={() => submitRating({ episodeId: selectedEpisode.id }, episodeRatings[selectedEpisode.id] ?? '0')}
                                     >
                                       Оцінити
                                     </button>
@@ -3361,15 +4083,21 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
                     minLength={10}
                     maxLength={4000}
                     value={reviewContent}
-                    onChange={(event) => setReviewContent(event.target.value)}
+                    onChange={(event) => {
+                      setReviewContent(event.target.value);
+                      if (reviewError) setReviewError('');
+                    }}
                     placeholder="Поділіться думкою про фільм"
+                    aria-invalid={reviewError ? 'true' : undefined}
                   />
+                  {reviewError ? <small className="field-error">{reviewError}</small> : null}
                 </label>
                 <label className="checkbox-row">
                   <input type="checkbox" checked={reviewSpoiler} onChange={(event) => setReviewSpoiler(event.target.checked)} />
                   Є спойлери
                 </label>
                 <button className="primary-action" disabled={isSubmitting} type="submit">
+                  {isSubmitting ? <Spinner /> : null}
                   Відправити на модерацію
                 </button>
               </form>
@@ -3382,14 +4110,16 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
             {reviews.length ? (
               <div className="review-list">
                 {reviews.map((review) => {
-                  const canEdit = user && (user.id === review.userId || Number(user.role) === 1);
+                  const canEdit = user && (user.id === review.userId || isAdminUser(user));
                   const isEditing = editingReviewId === review.id;
                   const comments = commentsByReview[review.id] ?? [];
 
                   return (
                     <article className="review-card" key={review.id}>
                       <header>
-                        <strong>{review.username}</strong>
+                        <Link className="author-link" to={`/users/${review.userId}`}>
+                          {review.username}
+                        </Link>
                         <span>{formatDate(review.createdAt)}</span>
                       </header>
                       {review.isSpoiler ? <small>Містить спойлери</small> : null}
@@ -3413,7 +4143,7 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
                         <p>{review.content}</p>
                       )}
                       <footer>
-                        <button type="button" onClick={() => likeReview(review.id)}>
+                        <button className={review.isLikedByCurrentUser ? 'active-like' : ''} type="button" onClick={() => likeReview(review.id)}>
                           ♥ {review.likesCount}
                         </button>
                         {canEdit && !isEditing ? (
@@ -3432,11 +4162,13 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
                         {comments.map((comment) => (
                           <div className="comment-card" key={comment.id}>
                             <div>
-                              <strong>{comment.username}</strong>
+                              <Link className="author-link" to={`/users/${comment.userId}`}>
+                                {comment.username}
+                              </Link>
                               <span>{formatDate(comment.createdAt)}</span>
                             </div>
                             <p>{comment.content}</p>
-                            {user && (user.id === comment.userId || Number(user.role) === 1) ? (
+                            {user && (user.id === comment.userId || isAdminUser(user)) ? (
                               <button type="button" onClick={() => deleteComment(review.id, comment.id)}>
                                 Видалити
                               </button>
@@ -3489,7 +4221,7 @@ function MovieDetailsPage({ accessToken, user }: { accessToken: string; user: Au
             <p className="kicker">Оцініть це</p>
             <h2 id="rating-modal-title">{movie.title}</h2>
             <StarRatingInput value={Number(ratingDraft)} onChange={(value) => setRatingDraft(String(value))} />
-            <button className="rating-modal-submit" disabled={isSubmitting} type="button" onClick={submitMovieRatingFromModal}>
+            <button className="rating-modal-submit" disabled={isSubmitting || Number(ratingDraft) < 1} type="button" onClick={submitMovieRatingFromModal}>
               Оцінити
             </button>
           </div>
@@ -3609,7 +4341,7 @@ function SectionTitle({ title }: { title: string }) {
 }
 
 function StarRatingInput({ value, onChange }: { value: number; onChange: (value: number) => void }) {
-  const normalizedValue = Math.max(1, Math.min(10, Math.round(value || 0)));
+  const normalizedValue = Math.max(0, Math.min(10, Math.round(value || 0)));
   const [hoveredValue, setHoveredValue] = useState<number | null>(null);
   const displayValue = hoveredValue ?? normalizedValue;
 
@@ -3640,6 +4372,10 @@ function StarRatingInput({ value, onChange }: { value: number; onChange: (value:
 
 function StatusMessage({ children, tone = 'info' }: { children: React.ReactNode; tone?: 'info' | 'danger' }) {
   return <p className={`status-message ${tone}`}>{children}</p>;
+}
+
+function Spinner() {
+  return <span className="spinner" aria-hidden="true" />;
 }
 
 function EmptyState({ title, text }: { title: string; text: string }) {
@@ -3709,10 +4445,69 @@ function formatDate(value: string) {
   return new Intl.DateTimeFormat('uk-UA', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(value));
 }
 
+function getTodayInputDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 function formatReviewStatus(value?: number | string) {
   if (value === 1 || value === 'Approved') return 'Опубліковано';
   if (value === 2 || value === 'Rejected') return 'Відхилено';
   return 'Очікує';
+}
+
+function normalizeReviewStatus(value?: number | string) {
+  if (value === 1 || value === 'Approved') return 'Approved';
+  if (value === 2 || value === 'Rejected') return 'Rejected';
+  return 'Pending';
+}
+
+function normalizeCreditType(value?: number | string) {
+  if (value === 0 || value === 'Actor') return 'Actor';
+  if (value === 1 || value === 'Director') return 'Director';
+  if (value === 2 || value === 'Writer') return 'Writer';
+  if (value === 3 || value === 'Producer') return 'Producer';
+  return 'Actor';
+}
+
+function extractYoutubeId(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+
+  try {
+    const url = new URL(trimmed);
+    if (url.hostname.includes('youtu.be')) {
+      return url.pathname.split('/').filter(Boolean)[0] ?? '';
+    }
+
+    const watchId = url.searchParams.get('v');
+    if (watchId) return watchId;
+
+    const parts = url.pathname.split('/').filter(Boolean);
+    const markerIndex = parts.findIndex((part) => ['embed', 'shorts', 'live'].includes(part));
+    if (markerIndex >= 0 && parts[markerIndex + 1]) {
+      return parts[markerIndex + 1];
+    }
+  } catch {
+    return trimmed;
+  }
+
+  return trimmed;
+}
+
+function sanitizeNonNegativeIntegerInput(value: string) {
+  if (!value) return '';
+
+  return String(toNonNegativeInteger(value, 0));
+}
+
+function toNonNegativeInteger(value: string, fallback = 0) {
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.max(0, Math.trunc(parsed));
 }
 
 function normalizeWatchlistStatus(value?: WatchlistStatus | null) {
@@ -3727,6 +4522,10 @@ function formatWatchlistStatus(value?: string | null) {
   return 'Додати';
 }
 
+function isAdminUser(user: AuthUser | null) {
+  return user?.role === 1 || user?.role === '1' || user?.role === 'Admin';
+}
+
 function formatDuration(value: number) {
   const hours = Math.floor(value / 60);
   const minutes = value % 60;
@@ -3738,8 +4537,8 @@ function formatDuration(value: number) {
   return `${hours} год ${minutes} хв`;
 }
 
-async function fetchJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${apiUrl}${path}`);
+async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const response = await apiFetch(`${apiUrl}${path}`, options);
   const data = await readResponseBody(response);
 
   if (!response.ok) {
@@ -3750,7 +4549,7 @@ async function fetchJson<T>(path: string): Promise<T> {
 }
 
 async function authedRequest<T>(path: string, accessToken: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${apiUrl}${path}`, {
+  const response = await apiFetch(`${apiUrl}${path}`, {
     ...options,
     credentials: 'include',
     headers: {
@@ -3773,7 +4572,7 @@ async function uploadImage(path: string, accessToken: string, file: File): Promi
   const body = new FormData();
   body.append('file', file);
 
-  const response = await fetch(`${apiUrl}${path}`, {
+  const response = await apiFetch(`${apiUrl}${path}`, {
     method: 'POST',
     credentials: 'include',
     headers: {
@@ -3801,6 +4600,45 @@ function formatCreditType(value: number | string) {
   return 'Актор';
 }
 
+function localizeCountryName(value: string) {
+  const countries: Record<string, string> = {
+    'United States of America': 'США',
+    'United States': 'США',
+    'United Kingdom': 'Велика Британія',
+    Canada: 'Канада',
+    France: 'Франція',
+    Germany: 'Німеччина',
+    Italy: 'Італія',
+    Spain: 'Іспанія',
+    Japan: 'Японія',
+    China: 'Китай',
+    'South Korea': 'Південна Корея',
+    India: 'Індія',
+    Australia: 'Австралія',
+    Ukraine: 'Україна'
+  };
+
+  return countries[value] ?? value;
+}
+
+function localizeLanguageName(value: string) {
+  const languages: Record<string, string> = {
+    English: 'Англійська',
+    Ukrainian: 'Українська',
+    Russian: 'Російська',
+    French: 'Французька',
+    German: 'Німецька',
+    Italian: 'Італійська',
+    Spanish: 'Іспанська',
+    Japanese: 'Японська',
+    Korean: 'Корейська',
+    Chinese: 'Китайська',
+    Hindi: 'Гінді'
+  };
+
+  return languages[value] ?? value;
+}
+
 async function readResponseBody(response: Response): Promise<unknown> {
   const text = await response.text();
 
@@ -3823,6 +4661,12 @@ async function readResponseBody(response: Response): Promise<unknown> {
 function getApiErrorMessage(data: unknown, fallback = 'Щось пішло не так. Спробуйте ще раз.') {
   if (data && typeof data === 'object') {
     const record = data as Record<string, unknown>;
+    if (record.errors && typeof record.errors === 'object') {
+      const messages = Object.values(record.errors as Record<string, unknown>)
+        .flatMap((value) => Array.isArray(value) ? value : [value])
+        .filter((value): value is string => typeof value === 'string');
+      if (messages.length) return messages.map(toFriendlyMessage).join(' ');
+    }
     const message = record.message ?? record.Message ?? record.detail ?? record.title;
 
     if (typeof message === 'string') {
@@ -3849,21 +4693,18 @@ function toFriendlyMessage(message?: string) {
       return 'Перевірте електронну пошту: адреса виглядає неправильно.';
     case 'Password must contain at least 8 characters.':
       return 'Пароль має містити щонайменше 8 символів.';
+    case 'Password must contain between 8 and 256 characters.':
+      return 'Пароль має містити від 8 до 256 символів.';
     case 'Password confirmation does not match.':
       return 'Паролі не збігаються.';
     case 'Username is already taken.':
       return 'Це ім’я вже зайняте.';
     case 'Email is already registered.':
       return 'Ця пошта вже зареєстрована.';
-    case 'Email confirmation token is invalid or expired.':
-    case 'Email confirmation token is invalid.':
-      return 'Підтвердження пошти застаріло. Створіть акаунт ще раз.';
     case 'User was not found.':
       return 'Акаунт не знайдено.';
     case 'Account is temporarily locked.':
       return 'Акаунт тимчасово заблоковано після кількох спроб входу.';
-    case 'Email must be confirmed before login.':
-      return 'Спочатку підтвердьте пошту.';
     case 'List name already exists.':
       return 'Список із такою назвою вже існує.';
     case 'List was not found.':
@@ -3872,13 +4713,43 @@ function toFriendlyMessage(message?: string) {
       return 'Назва списку обов’язкова і має бути до 80 символів.';
     case 'List description must be at most 500 characters.':
       return 'Опис списку має бути до 500 символів.';
+    case 'Movie or series already exists in the catalog.':
+      return 'Такий фільм або серіал уже є в каталозі.';
+    case 'Cast sort order cannot be negative.':
+      return 'Порядок показу персон не може бути мінусовим.';
+    case 'Movie already has a review from this user.':
+      return 'Ви вже залишили рецензію на цей фільм.';
+    case 'Review content must be between 10 and 4000 characters.':
+      return 'Рецензія має містити від 10 до 4000 символів.';
+    case 'Comment content must be between 2 and 1000 characters.':
+      return 'Коментар має містити від 2 до 1000 символів.';
+    case 'Review was not found.':
+      return 'Рецензію не знайдено або вона ще не опублікована.';
+    case 'Score must be between 1 and 10.':
+      return 'Оцінка має бути від 1 до 10.';
+    case 'Movie was already rated by this user.':
+      return 'Ви вже оцінили цей фільм.';
+    case 'Episode was already rated by this user.':
+      return 'Ви вже оцінили цю серію.';
+    case 'Birth date cannot be in the future.':
+      return 'Дата народження не може бути в майбутньому.';
+    case 'Season with this number already exists.':
+      return 'Сезон із таким номером уже існує.';
+    case 'Episode with this number already exists.':
+      return 'Серія з таким номером уже існує в цьому сезоні.';
+    case 'Season was not found.':
+      return 'Сезон не знайдено.';
+    case 'Series was not found.':
+      return 'Серіал не знайдено.';
+    case 'Episode title is required and must be at most 255 characters.':
+      return 'Назва серії обов’язкова і має бути до 255 символів.';
+    case 'Episode description must be at most 800 characters.':
+      return 'Опис серії має бути до 800 символів.';
     default:
       return message || 'Щось пішло не так. Спробуйте ще раз.';
   }
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
+  <App />
 );

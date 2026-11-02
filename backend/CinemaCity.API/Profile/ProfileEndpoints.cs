@@ -1,7 +1,7 @@
 using System.Security.Claims;
+using CinemaCity.Application.Persistence;
 using CinemaCity.Domain.Entities;
 using CinemaCity.Domain.Enums;
-using CinemaCity.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
 namespace CinemaCity.API.Profile;
@@ -10,6 +10,21 @@ public static class ProfileEndpoints
 {
     public static IEndpointRouteBuilder MapProfileEndpoints(this IEndpointRouteBuilder routes)
     {
+        var publicGroup = routes.MapGroup("/api/users")
+            .WithTags("Public Profiles");
+
+        publicGroup.MapGet("/{userId:guid}", GetPublicProfileAsync)
+            .WithName("GetPublicProfile");
+
+        publicGroup.MapGet("/{userId:guid}/lists", GetPublicMovieListsAsync)
+            .WithName("GetPublicMovieLists");
+
+        publicGroup.MapGet("/{userId:guid}/lists/{listId:guid}", GetPublicMovieListAsync)
+            .WithName("GetPublicMovieList");
+
+        publicGroup.MapGet("/{userId:guid}/reviews", GetPublicReviewsAsync)
+            .WithName("GetPublicUserReviews");
+
         var group = routes.MapGroup("/api/profile")
             .RequireAuthorization()
             .WithTags("Profile");
@@ -56,23 +71,179 @@ public static class ProfileEndpoints
         return routes;
     }
 
+    private static async Task<IResult> GetPublicProfileAsync(
+        Guid userId,
+        IRepository<User> userRepository,
+        IRepository<UserMovieList> listRepository,
+        IRepository<Review> reviewRepository,
+        CancellationToken cancellationToken)
+    {
+        var user = await userRepository.Query()
+            .AsNoTracking()
+            .Where(candidate => candidate.Id == userId)
+            .Select(candidate => new
+            {
+                candidate.Id,
+                candidate.Username,
+                candidate.AvatarUrl,
+                candidate.CreatedAt
+            })
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (user is null)
+        {
+            return Results.NotFound(new { Message = "User was not found." });
+        }
+
+        var publicListsCount = await listRepository.Query()
+            .AsNoTracking()
+            .CountAsync(list => list.UserId == userId && list.IsPublic, cancellationToken);
+
+        var approvedReviewsCount = await reviewRepository.Query()
+            .AsNoTracking()
+            .CountAsync(review => review.UserId == userId && !review.IsDeleted && review.Status == ReviewStatus.Approved, cancellationToken);
+
+        return Results.Ok(new PublicUserProfileResponse(
+            user.Id,
+            user.Username,
+            user.AvatarUrl,
+            user.CreatedAt,
+            publicListsCount,
+            approvedReviewsCount));
+    }
+
+    private static async Task<IResult> GetPublicMovieListsAsync(
+        Guid userId,
+        IRepository<User> userRepository,
+        IRepository<UserMovieList> listRepository,
+        CancellationToken cancellationToken)
+    {
+        var userExists = await userRepository.Query().AsNoTracking().AnyAsync(user => user.Id == userId, cancellationToken);
+
+        if (!userExists)
+        {
+            return Results.NotFound(new { Message = "User was not found." });
+        }
+
+        var lists = await listRepository.Query()
+            .AsNoTracking()
+            .Where(list => list.UserId == userId && list.IsPublic)
+            .OrderByDescending(list => list.UpdatedAt ?? list.CreatedAt)
+            .Select(list => new MovieListSummaryResponse(
+                list.Id,
+                list.Name,
+                list.Description,
+                list.IsPublic,
+                list.Items.Count(item => !item.Movie.IsDeleted),
+                list.CreatedAt,
+                list.UpdatedAt))
+            .ToListAsync(cancellationToken);
+
+        return Results.Ok(lists);
+    }
+
+    private static async Task<IResult> GetPublicMovieListAsync(
+        Guid userId,
+        Guid listId,
+        IRepository<UserMovieList> listRepository,
+        CancellationToken cancellationToken)
+    {
+        var list = await listRepository.Query()
+            .AsNoTracking()
+            .Where(candidate => candidate.Id == listId && candidate.UserId == userId && candidate.IsPublic)
+            .Select(candidate => new MovieListDetailsResponse(
+                candidate.Id,
+                candidate.Name,
+                candidate.Description,
+                candidate.IsPublic,
+                candidate.CreatedAt,
+                candidate.UpdatedAt,
+                candidate.Items
+                    .Where(item => !item.Movie.IsDeleted)
+                    .OrderByDescending(item => item.AddedAt)
+                    .Select(item => new MovieListItemResponse(
+                        item.Id,
+                        item.MovieId,
+                        item.Movie.Title,
+                        item.Movie.OriginalTitle,
+                        item.Movie.ContentType,
+                        item.Movie.ReleaseYear,
+                        item.Movie.PosterUrl,
+                        item.Movie.BackdropUrl,
+                        item.Movie.AverageRating,
+                        item.Movie.RatingsCount,
+                        item.Movie.Genres.OrderBy(genre => genre.Name).Select(genre => new WatchlistGenreResponse(genre.Id, genre.Name, genre.Slug)).ToArray(),
+                        item.AddedAt))
+                    .ToArray()))
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (list is null)
+        {
+            return Results.NotFound(new { Message = "List was not found." });
+        }
+
+        return Results.Ok(list);
+    }
+
+    private static async Task<IResult> GetPublicReviewsAsync(
+        Guid userId,
+        IRepository<User> userRepository,
+        IRepository<Review> reviewRepository,
+        CancellationToken cancellationToken)
+    {
+        var userExists = await userRepository.Query().AsNoTracking().AnyAsync(user => user.Id == userId, cancellationToken);
+
+        if (!userExists)
+        {
+            return Results.NotFound(new { Message = "User was not found." });
+        }
+
+        var reviews = await reviewRepository.Query()
+            .AsNoTracking()
+            .Where(review =>
+                review.UserId == userId
+                && !review.IsDeleted
+                && review.Status == ReviewStatus.Approved
+                && !review.Movie.IsDeleted)
+            .OrderByDescending(review => review.CreatedAt)
+            .Select(review => new PublicUserReviewResponse(
+                review.Id,
+                review.MovieId,
+                review.Movie.Title,
+                review.Movie.PosterUrl,
+                review.Movie.ContentType,
+                review.Movie.ReleaseYear,
+                review.Content,
+                review.IsSpoiler,
+                review.LikesCount,
+                review.CreatedAt,
+                review.UpdatedAt))
+            .ToListAsync(cancellationToken);
+
+        return Results.Ok(reviews);
+    }
+
     private static async Task<IResult> GetStatsAsync(
         ClaimsPrincipal principal,
-        AppDbContext dbContext,
+        IRepository<WatchlistItem> watchlistRepository,
+        IRepository<Rating> ratingRepository,
+        IRepository<Review> reviewRepository,
+        IRepository<Comment> commentRepository,
+        IRepository<ReviewLike> reviewLikeRepository,
         CancellationToken cancellationToken)
     {
         var userId = GetUserId(principal);
-        var watchlistCount = await dbContext.WatchlistItems.CountAsync(item => item.UserId == userId && item.Status == WatchlistStatus.Watchlist, cancellationToken);
-        var watchedCount = await dbContext.WatchlistItems.CountAsync(item => item.UserId == userId && item.Status == WatchlistStatus.Watched, cancellationToken);
-        var ratings = dbContext.Ratings.AsNoTracking().Where(rating => rating.UserId == userId);
+        var watchlistCount = await watchlistRepository.Query().CountAsync(item => item.UserId == userId && item.Status == WatchlistStatus.Watchlist, cancellationToken);
+        var watchedCount = await watchlistRepository.Query().CountAsync(item => item.UserId == userId && item.Status == WatchlistStatus.Watched, cancellationToken);
+        var ratings = ratingRepository.Query().AsNoTracking().Where(rating => rating.UserId == userId);
         var ratingsCount = await ratings.CountAsync(cancellationToken);
         var averageScore = ratingsCount == 0 ? 0 : Math.Round(await ratings.AverageAsync(rating => rating.Score, cancellationToken), 1);
-        var reviewsCount = await dbContext.Reviews.CountAsync(review => review.UserId == userId && !review.IsDeleted, cancellationToken);
-        var approvedReviewsCount = await dbContext.Reviews.CountAsync(review => review.UserId == userId && !review.IsDeleted && review.Status == ReviewStatus.Approved, cancellationToken);
-        var commentsCount = await dbContext.Comments.CountAsync(comment => comment.UserId == userId && !comment.IsDeleted, cancellationToken);
-        var likedReviewsCount = await dbContext.ReviewLikes.CountAsync(like => like.UserId == userId, cancellationToken);
+        var reviewsCount = await reviewRepository.Query().CountAsync(review => review.UserId == userId && !review.IsDeleted, cancellationToken);
+        var approvedReviewsCount = await reviewRepository.Query().CountAsync(review => review.UserId == userId && !review.IsDeleted && review.Status == ReviewStatus.Approved, cancellationToken);
+        var commentsCount = await commentRepository.Query().CountAsync(comment => comment.UserId == userId && !comment.IsDeleted, cancellationToken);
+        var likedReviewsCount = await reviewLikeRepository.Query().CountAsync(like => like.UserId == userId, cancellationToken);
 
-        var favoriteGenres = await dbContext.Ratings
+        var favoriteGenres = await ratingRepository.Query()
             .AsNoTracking()
             .Where(rating => rating.UserId == userId && rating.MovieId != null)
             .SelectMany(rating => rating.Movie!.Genres.Select(genre => genre.Name))
@@ -97,12 +268,12 @@ public static class ProfileEndpoints
 
     private static async Task<IResult> GetWatchlistAsync(
         ClaimsPrincipal principal,
-        AppDbContext dbContext,
+        IRepository<WatchlistItem> watchlistRepository,
         WatchlistStatus? status,
         CancellationToken cancellationToken)
     {
         var userId = GetUserId(principal);
-        var query = dbContext.WatchlistItems
+        var query = watchlistRepository.Query()
             .AsNoTracking()
             .Include(item => item.Movie)
                 .ThenInclude(movie => movie.Genres)
@@ -124,28 +295,31 @@ public static class ProfileEndpoints
     private static async Task<IResult> GetMovieStateAsync(
         Guid movieId,
         ClaimsPrincipal principal,
-        AppDbContext dbContext,
+        IRepository<Movie> movieRepository,
+        IRepository<WatchlistItem> watchlistRepository,
+        IRepository<Rating> ratingRepository,
+        IRepository<UserMovieListItem> listItemRepository,
         CancellationToken cancellationToken)
     {
         var userId = GetUserId(principal);
-        var movieExists = await dbContext.Movies.AnyAsync(movie => movie.Id == movieId && !movie.IsDeleted, cancellationToken);
+        var movieExists = await movieRepository.Query().AnyAsync(movie => movie.Id == movieId && !movie.IsDeleted, cancellationToken);
 
         if (!movieExists)
         {
             return Results.NotFound(new { Message = "Movie was not found." });
         }
 
-        var watchlistItem = await dbContext.WatchlistItems
+        var watchlistItem = await watchlistRepository.Query()
             .AsNoTracking()
             .FirstOrDefaultAsync(item => item.UserId == userId && item.MovieId == movieId, cancellationToken);
 
-        var rating = await dbContext.Ratings
+        var rating = await ratingRepository.Query()
             .AsNoTracking()
             .Where(candidate => candidate.UserId == userId && candidate.MovieId == movieId)
             .Select(candidate => new UserRatingResponse(candidate.Id, candidate.Score))
             .FirstOrDefaultAsync(cancellationToken);
 
-        var listMemberships = await dbContext.UserMovieListItems
+        var listMemberships = await listItemRepository.Query()
             .AsNoTracking()
             .Where(item => item.MovieId == movieId && item.UserMovieList.UserId == userId)
             .OrderBy(item => item.UserMovieList.Name)
@@ -163,11 +337,11 @@ public static class ProfileEndpoints
 
     private static async Task<IResult> GetMovieListsAsync(
         ClaimsPrincipal principal,
-        AppDbContext dbContext,
+        IRepository<UserMovieList> listRepository,
         CancellationToken cancellationToken)
     {
         var userId = GetUserId(principal);
-        var lists = await dbContext.UserMovieLists
+        var lists = await listRepository.Query()
             .AsNoTracking()
             .Where(list => list.UserId == userId)
             .OrderByDescending(list => list.UpdatedAt ?? list.CreatedAt)
@@ -187,11 +361,11 @@ public static class ProfileEndpoints
     private static async Task<IResult> GetMovieListAsync(
         Guid listId,
         ClaimsPrincipal principal,
-        AppDbContext dbContext,
+        IRepository<UserMovieList> listRepository,
         CancellationToken cancellationToken)
     {
         var userId = GetUserId(principal);
-        var list = await dbContext.UserMovieLists
+        var list = await listRepository.Query()
             .AsNoTracking()
             .Where(candidate => candidate.Id == listId && candidate.UserId == userId)
             .Select(candidate => new MovieListDetailsResponse(
@@ -231,7 +405,8 @@ public static class ProfileEndpoints
     private static async Task<IResult> CreateMovieListAsync(
         MovieListUpsertRequest request,
         ClaimsPrincipal principal,
-        AppDbContext dbContext,
+        IRepository<UserMovieList> listRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
         var validation = ValidateMovieList(request);
@@ -242,7 +417,7 @@ public static class ProfileEndpoints
 
         var userId = GetUserId(principal);
         var name = request.Name.Trim();
-        var exists = await dbContext.UserMovieLists
+        var exists = await listRepository.Query()
             .AnyAsync(list => list.UserId == userId && list.Name == name, cancellationToken);
 
         if (exists)
@@ -260,8 +435,8 @@ public static class ProfileEndpoints
             CreatedAt = DateTimeOffset.UtcNow
         };
 
-        dbContext.UserMovieLists.Add(list);
-        await dbContext.SaveChangesAsync(cancellationToken);
+        listRepository.Add(list);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Results.Created($"/api/profile/lists/{list.Id}", new MovieListSummaryResponse(
             list.Id,
@@ -277,7 +452,8 @@ public static class ProfileEndpoints
         Guid listId,
         MovieListUpsertRequest request,
         ClaimsPrincipal principal,
-        AppDbContext dbContext,
+        IRepository<UserMovieList> listRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
         var validation = ValidateMovieList(request);
@@ -287,7 +463,7 @@ public static class ProfileEndpoints
         }
 
         var userId = GetUserId(principal);
-        var list = await dbContext.UserMovieLists
+        var list = await listRepository.Query()
             .FirstOrDefaultAsync(candidate => candidate.Id == listId && candidate.UserId == userId, cancellationToken);
 
         if (list is null)
@@ -296,7 +472,7 @@ public static class ProfileEndpoints
         }
 
         var name = request.Name.Trim();
-        var nameExists = await dbContext.UserMovieLists
+        var nameExists = await listRepository.Query()
             .AnyAsync(candidate => candidate.UserId == userId && candidate.Id != listId && candidate.Name == name, cancellationToken);
 
         if (nameExists)
@@ -308,7 +484,7 @@ public static class ProfileEndpoints
         list.Description = TrimOrNull(request.Description);
         list.IsPublic = request.IsPublic;
         list.UpdatedAt = DateTimeOffset.UtcNow;
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Results.NoContent();
     }
@@ -316,11 +492,12 @@ public static class ProfileEndpoints
     private static async Task<IResult> DeleteMovieListAsync(
         Guid listId,
         ClaimsPrincipal principal,
-        AppDbContext dbContext,
+        IRepository<UserMovieList> listRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
         var userId = GetUserId(principal);
-        var list = await dbContext.UserMovieLists
+        var list = await listRepository.Query()
             .FirstOrDefaultAsync(candidate => candidate.Id == listId && candidate.UserId == userId, cancellationToken);
 
         if (list is null)
@@ -328,8 +505,8 @@ public static class ProfileEndpoints
             return Results.NoContent();
         }
 
-        dbContext.UserMovieLists.Remove(list);
-        await dbContext.SaveChangesAsync(cancellationToken);
+        listRepository.Remove(list);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Results.NoContent();
     }
@@ -338,11 +515,14 @@ public static class ProfileEndpoints
         Guid listId,
         MovieListItemRequest request,
         ClaimsPrincipal principal,
-        AppDbContext dbContext,
+        IRepository<Movie> movieRepository,
+        IRepository<UserMovieList> listRepository,
+        IRepository<UserMovieListItem> listItemRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
         var userId = GetUserId(principal);
-        var list = await dbContext.UserMovieLists
+        var list = await listRepository.Query()
             .FirstOrDefaultAsync(candidate => candidate.Id == listId && candidate.UserId == userId, cancellationToken);
 
         if (list is null)
@@ -350,18 +530,18 @@ public static class ProfileEndpoints
             return Results.NotFound(new { Message = "List was not found." });
         }
 
-        var movieExists = await dbContext.Movies.AnyAsync(movie => movie.Id == request.MovieId && !movie.IsDeleted, cancellationToken);
+        var movieExists = await movieRepository.Query().AnyAsync(movie => movie.Id == request.MovieId && !movie.IsDeleted, cancellationToken);
         if (!movieExists)
         {
             return Results.NotFound(new { Message = "Movie was not found." });
         }
 
-        var existing = await dbContext.UserMovieListItems
+        var existing = await listItemRepository.Query()
             .FirstOrDefaultAsync(candidate => candidate.UserMovieListId == listId && candidate.MovieId == request.MovieId, cancellationToken);
 
         if (existing is null)
         {
-            dbContext.UserMovieListItems.Add(new UserMovieListItem
+            listItemRepository.Add(new UserMovieListItem
             {
                 Id = Guid.NewGuid(),
                 UserMovieListId = listId,
@@ -370,7 +550,7 @@ public static class ProfileEndpoints
             });
 
             list.UpdatedAt = DateTimeOffset.UtcNow;
-            await dbContext.SaveChangesAsync(cancellationToken);
+            await unitOfWork.SaveChangesAsync(cancellationToken);
         }
 
         return Results.NoContent();
@@ -380,11 +560,12 @@ public static class ProfileEndpoints
         Guid listId,
         Guid movieId,
         ClaimsPrincipal principal,
-        AppDbContext dbContext,
+        IRepository<UserMovieListItem> listItemRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
         var userId = GetUserId(principal);
-        var item = await dbContext.UserMovieListItems
+        var item = await listItemRepository.Query()
             .Include(candidate => candidate.UserMovieList)
             .FirstOrDefaultAsync(candidate =>
                 candidate.UserMovieListId == listId
@@ -398,8 +579,8 @@ public static class ProfileEndpoints
         }
 
         item.UserMovieList.UpdatedAt = DateTimeOffset.UtcNow;
-        dbContext.UserMovieListItems.Remove(item);
-        await dbContext.SaveChangesAsync(cancellationToken);
+        listItemRepository.Remove(item);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Results.NoContent();
     }
@@ -408,29 +589,35 @@ public static class ProfileEndpoints
         Guid movieId,
         WatchlistUpsertRequest request,
         ClaimsPrincipal principal,
-        AppDbContext dbContext,
+        IRepository<Movie> movieRepository,
+        IRepository<WatchlistItem> watchlistRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
-        return SaveWatchlistAsync(movieId, request.Status, principal, dbContext, cancellationToken);
+        return SaveWatchlistAsync(movieId, request.Status, principal, movieRepository, watchlistRepository, unitOfWork, cancellationToken);
     }
 
     private static Task<IResult> UpsertWatchlistAsync(
         WatchlistUpsertRequest request,
         ClaimsPrincipal principal,
-        AppDbContext dbContext,
+        IRepository<Movie> movieRepository,
+        IRepository<WatchlistItem> watchlistRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
-        return SaveWatchlistAsync(request.MovieId, request.Status, principal, dbContext, cancellationToken);
+        return SaveWatchlistAsync(request.MovieId, request.Status, principal, movieRepository, watchlistRepository, unitOfWork, cancellationToken);
     }
 
     private static async Task<IResult> SaveWatchlistAsync(
         Guid movieId,
         WatchlistStatus status,
         ClaimsPrincipal principal,
-        AppDbContext dbContext,
+        IRepository<Movie> movieRepository,
+        IRepository<WatchlistItem> watchlistRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
-        var movieExists = await dbContext.Movies.AnyAsync(movie => movie.Id == movieId && !movie.IsDeleted, cancellationToken);
+        var movieExists = await movieRepository.Query().AnyAsync(movie => movie.Id == movieId && !movie.IsDeleted, cancellationToken);
 
         if (!movieExists)
         {
@@ -438,7 +625,7 @@ public static class ProfileEndpoints
         }
 
         var userId = GetUserId(principal);
-        var item = await dbContext.WatchlistItems
+        var item = await watchlistRepository.Query()
             .FirstOrDefaultAsync(candidate => candidate.UserId == userId && candidate.MovieId == movieId, cancellationToken);
 
         if (item is null)
@@ -451,7 +638,7 @@ public static class ProfileEndpoints
                 Status = status,
                 AddedAt = DateTimeOffset.UtcNow
             };
-            dbContext.WatchlistItems.Add(item);
+            watchlistRepository.Add(item);
         }
         else
         {
@@ -459,9 +646,9 @@ public static class ProfileEndpoints
             item.UpdatedAt = DateTimeOffset.UtcNow;
         }
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        var response = await dbContext.WatchlistItems
+        var response = await watchlistRepository.Query()
             .AsNoTracking()
             .Include(candidate => candidate.Movie)
                 .ThenInclude(movie => movie.Genres)
@@ -475,11 +662,12 @@ public static class ProfileEndpoints
     private static async Task<IResult> DeleteWatchlistAsync(
         Guid movieId,
         ClaimsPrincipal principal,
-        AppDbContext dbContext,
+        IRepository<WatchlistItem> watchlistRepository,
+        IUnitOfWork unitOfWork,
         CancellationToken cancellationToken)
     {
         var userId = GetUserId(principal);
-        var item = await dbContext.WatchlistItems
+        var item = await watchlistRepository.Query()
             .FirstOrDefaultAsync(candidate => candidate.UserId == userId && candidate.MovieId == movieId, cancellationToken);
 
         if (item is null)
@@ -487,8 +675,8 @@ public static class ProfileEndpoints
             return Results.NoContent();
         }
 
-        dbContext.WatchlistItems.Remove(item);
-        await dbContext.SaveChangesAsync(cancellationToken);
+        watchlistRepository.Remove(item);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Results.NoContent();
     }
@@ -567,6 +755,27 @@ public sealed record ProfileStatsResponse(
     int CommentsCount,
     int LikedReviewsCount,
     IReadOnlyCollection<string> FavoriteGenres);
+
+public sealed record PublicUserProfileResponse(
+    Guid Id,
+    string Username,
+    string? AvatarUrl,
+    DateTimeOffset CreatedAt,
+    int PublicListsCount,
+    int ApprovedReviewsCount);
+
+public sealed record PublicUserReviewResponse(
+    Guid Id,
+    Guid MovieId,
+    string MovieTitle,
+    string? MoviePosterUrl,
+    ContentType ContentType,
+    int ReleaseYear,
+    string Content,
+    bool IsSpoiler,
+    int LikesCount,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? UpdatedAt);
 
 public sealed record MovieUserStateResponse(
     WatchlistStatus? WatchlistStatus,

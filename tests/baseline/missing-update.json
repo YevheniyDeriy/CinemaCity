@@ -1,0 +1,7 @@
+{
+  "source": "unchanged working-tree monolith",
+  "method": "PUT",
+  "path": "/api/ratings/11111111-1111-1111-1111-111111111111",
+  "status": 404,
+  "body": "{\u0022message\u0022:\u0022Rating was not found.\u0022}"
+}

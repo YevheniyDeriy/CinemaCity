@@ -1,5 +1,6 @@
+using CinemaCity.Application.Persistence;
+using CinemaCity.Domain.Entities;
 using CinemaCity.Domain.Enums;
-using CinemaCity.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
 namespace CinemaCity.API.Search;
@@ -16,7 +17,9 @@ public static class SearchEndpoints
     }
 
     private static async Task<IResult> SearchAsync(
-        AppDbContext dbContext,
+        IRepository<Movie> movieRepository,
+        IRepository<Episode> episodeRepository,
+        IRepository<Person> personRepository,
         string? q,
         string? scope = "all",
         int limit = 8,
@@ -36,7 +39,7 @@ public static class SearchEndpoints
         var includeEpisodes = normalizedScope is "all" or "episode";
         var includePeople = normalizedScope is "all" or "person" or "celebrity";
 
-        var movieQuery = dbContext.Movies
+        var movieQuery = movieRepository.Query()
             .AsNoTracking()
             .Where(movie => !movie.IsDeleted);
 
@@ -69,7 +72,7 @@ public static class SearchEndpoints
             : [];
 
         var episodes = includeEpisodes
-            ? await dbContext.Episodes
+            ? await episodeRepository.Query()
                 .AsNoTracking()
                 .Include(episode => episode.Season)
                     .ThenInclude(season => season.Series)
@@ -90,7 +93,7 @@ public static class SearchEndpoints
             : [];
 
         var people = includePeople
-            ? await dbContext.Persons
+            ? await personRepository.Query()
                 .AsNoTracking()
                 .Where(person => person.FullName.ToLower().Contains(search))
                 .OrderBy(person => person.FullName)
