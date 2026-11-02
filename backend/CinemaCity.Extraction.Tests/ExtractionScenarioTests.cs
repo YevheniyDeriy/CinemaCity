@@ -13,6 +13,40 @@ namespace CinemaCity.Extraction.Tests;
 public sealed class ExtractionScenarioTests(ExtractedSystem system) : IClassFixture<ExtractedSystem>
 {
     [Fact]
+    public async Task RatingHistory_IsPrivatePagedAndCancellationIsRepeatable()
+    {
+        var admin = await LoginAsync(ExtractedSystem.AdminEmail);
+        var owner = await LoginAsync(ExtractedSystem.OwnerEmail);
+        var movie = await SendAsync(HttpMethod.Post, "/api/v1/catalog/items", MoviePayload("History " + Guid.NewGuid()), 201, admin);
+        var movieId = movie.GetProperty("id").GetGuid();
+        var first = await SendAsync(HttpMethod.Post, "/api/ratings", new { movieId, score = 7 }, 201, owner);
+        var id = first.GetProperty("id").GetGuid();
+        await SendAsync(HttpMethod.Get, $"/api/ratings/{id}", expected: 401);
+        await SendAsync(HttpMethod.Get, $"/api/ratings/{id}", expected: 404, token: admin);
+        var details = await SendAsync(HttpMethod.Get, $"/api/ratings/{id}", token: owner);
+        Assert.Equal("Active", details.GetProperty("status").GetString());
+        await Task.WhenAll(Enumerable.Range(0, 2).Select(_ => SendAsync(HttpMethod.Post, $"/api/ratings/{id}/cancel", new { }, 204, owner)));
+        await SendAsync(HttpMethod.Post, $"/api/ratings/{id}/cancel", new { }, 204, owner);
+        details = await SendAsync(HttpMethod.Get, $"/api/ratings/{id}", token: owner);
+        Assert.Equal("Cancelled", details.GetProperty("status").GetString());
+        await SendAsync(HttpMethod.Put, $"/api/ratings/{id}", new { score = 10 }, 404, owner);
+        var second = await SendAsync(HttpMethod.Post, "/api/ratings", new { movieId, score = 8 }, 201, owner);
+        Assert.NotEqual(id, second.GetProperty("id").GetGuid());
+        var page = await SendAsync(HttpMethod.Get, $"/api/ratings/page?movieId={movieId}&pageSize=1&status=All", token: owner);
+        Assert.Equal(2, page.GetProperty("totalCount").GetInt32());
+        Assert.Single(page.GetProperty("items").EnumerateArray());
+        var next = await SendAsync(HttpMethod.Get, $"/api/ratings/page?movieId={movieId}&pageSize=1&page=2&status=All", token: owner);
+        Assert.NotEqual(page.GetProperty("items")[0].GetProperty("id").GetGuid(), next.GetProperty("items")[0].GetProperty("id").GetGuid());
+        var cancelled = await SendAsync(HttpMethod.Get, $"/api/ratings/page?movieId={movieId}&status=Cancelled", token: owner);
+        Assert.Equal(1, cancelled.GetProperty("totalCount").GetInt32());
+        var other = await SendAsync(HttpMethod.Get, $"/api/ratings/page?movieId={movieId}", token: admin);
+        Assert.Equal(0, other.GetProperty("totalCount").GetInt32());
+        await SendAsync(HttpMethod.Get, "/api/ratings/page?page=0", expected: 400, token: owner);
+        await SendAsync(HttpMethod.Get, "/api/ratings/page?status=Unknown", expected: 400, token: owner);
+        await SendAsync(HttpMethod.Delete, $"/api/ratings/{second.GetProperty("id").GetGuid()}", expected: 204, token: owner);
+    }
+
+    [Fact]
     public async Task MyRatings_ArePrivateAndCancellationRemovesTheOperation()
     {
         var admin = await LoginAsync(ExtractedSystem.AdminEmail);
@@ -87,7 +121,7 @@ public sealed class ExtractionScenarioTests(ExtractedSystem system) : IClassFixt
             ("missing-update", HttpMethod.Put, "/api/ratings/" + missing, new { score = 5 }, true, 404),
             ("missing-delete", HttpMethod.Delete, "/api/ratings/" + missing, new { }, true, 404)
         };
-        var directory = System.IO.Path.Combine(system.Root, "tests", "baseline"); Directory.CreateDirectory(directory);
+        var directory = System.IO.Path.Combine(system.Root, ".logs", "current-baseline"); Directory.CreateDirectory(directory);
         foreach (var item in cases)
         {
             async Task<(int Status, string Body)> Call(HttpClient client)
@@ -101,7 +135,15 @@ public sealed class ExtractionScenarioTests(ExtractedSystem system) : IClassFixt
             var before = await Call(old); var after = await Call(system.Gateway);
             Assert.Equal(item.Status, before.Status);
             if (before.Status == 401) { Assert.Equal(401, after.Status); Assert.Equal(401, JsonSerializer.Deserialize<JsonElement>(after.Body).GetProperty("status").GetInt32()); }
-            else Assert.Equal(before, after);
+            else
+            {
+                Assert.Equal(before.Status, after.Status);
+                var oldBody = JsonSerializer.Deserialize<JsonElement>(before.Body);
+                var newBody = JsonSerializer.Deserialize<JsonElement>(after.Body);
+                if (oldBody.TryGetProperty("message", out var message)) Assert.Equal(message.GetString(), newBody.GetProperty("detail").GetString());
+                else Assert.Equal(before.Body, after.Body);
+                Assert.Equal(after.Status, newBody.GetProperty("status").GetInt32());
+            }
             await File.WriteAllTextAsync(System.IO.Path.Combine(directory, item.Name + ".json"), JsonSerializer.Serialize(new { source = "unchanged working-tree monolith", method = item.Method.Method, path = item.Path, status = before.Status, body = before.Body }, new JsonSerializerOptions { WriteIndented = true }));
         }
 

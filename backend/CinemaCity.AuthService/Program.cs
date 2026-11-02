@@ -39,7 +39,7 @@ if (app.Configuration.GetValue("Database:MigrateOnStartup", true))
     await scope.ServiceProvider.GetRequiredService<AuthDbContext>().Database.MigrateAsync();
     await AuthSeeder.SeedAsync(scope.ServiceProvider, app.Configuration);
 }
-app.UseServiceDefaults();
+app.UseServiceDefaults(normalizeErrors: true);
 app.MapDatabaseHealth<AuthDbContext>("CinemaCity.AuthService");
 app.MapControllers();
 app.MapUserEndpoints();

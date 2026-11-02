@@ -265,6 +265,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             entity.ToTable("ratings");
             entity.HasKey(rating => rating.Id);
             entity.Property(rating => rating.Id).HasColumnName("id");
+            entity.HasQueryFilter(rating => rating.CancelledAt == null);
+            entity.Property(rating => rating.CancelledAt).HasColumnName("cancelled_at");
             entity.Property(rating => rating.UserId).HasColumnName("user_id");
             entity.Property(rating => rating.MovieId).HasColumnName("movie_id");
             entity.Property(rating => rating.EpisodeId).HasColumnName("episode_id");
@@ -273,8 +275,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             entity.Property(rating => rating.UpdatedAt).HasColumnName("updated_at");
             entity.ToTable(table => table.HasCheckConstraint("ck_ratings_score", "score >= 1 AND score <= 10"));
             entity.ToTable(table => table.HasCheckConstraint("ck_ratings_single_target", "(movie_id IS NOT NULL AND episode_id IS NULL) OR (movie_id IS NULL AND episode_id IS NOT NULL)"));
-            entity.HasIndex(rating => new { rating.UserId, rating.MovieId }).IsUnique().HasFilter("movie_id IS NOT NULL");
-            entity.HasIndex(rating => new { rating.UserId, rating.EpisodeId }).IsUnique().HasFilter("episode_id IS NOT NULL");
+            entity.HasIndex(rating => new { rating.UserId, rating.MovieId }).IsUnique().HasFilter("movie_id IS NOT NULL AND cancelled_at IS NULL");
+            entity.HasIndex(rating => new { rating.UserId, rating.EpisodeId }).IsUnique().HasFilter("episode_id IS NOT NULL AND cancelled_at IS NULL");
             entity.HasIndex(rating => rating.MovieId);
             entity.HasOne(rating => rating.User).WithMany(user => user.Ratings).HasForeignKey(rating => rating.UserId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(rating => rating.Movie).WithMany(movie => movie.Ratings).HasForeignKey(rating => rating.MovieId).OnDelete(DeleteBehavior.Cascade);

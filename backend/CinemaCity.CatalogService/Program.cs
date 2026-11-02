@@ -37,7 +37,7 @@ if (app.Configuration.GetValue("Database:MigrateOnStartup", true))
     await scope.ServiceProvider.GetRequiredService<CatalogDbContext>().Database.MigrateAsync();
     await CatalogSeeder.SeedAsync(scope.ServiceProvider, app.Configuration);
 }
-app.UseServiceDefaults();
+app.UseServiceDefaults(normalizeErrors: true);
 app.UseStaticFiles();
 app.MapDatabaseHealth<CatalogDbContext>("CinemaCity.CatalogService");
 var api = app.MapGroup("").AddEndpointFilter<ProblemResultFilter>().AddEndpointFilter<ValidationFilter>();

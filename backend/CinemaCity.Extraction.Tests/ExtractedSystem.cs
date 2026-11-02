@@ -75,7 +75,7 @@ public sealed class ExtractedSystem : IAsyncLifetime
             };
             var auth = new Dictionary<string, string>(common) { ["ConnectionStrings__DefaultConnection"] = AuthConnection };
             var catalog = new Dictionary<string, string>(common) { ["ConnectionStrings__DefaultConnection"] = CatalogConnection, ["Logging__LogLevel__CinemaCity.CatalogService.Repositories.CatalogRepository"] = "Debug" };
-            var monolith = new Dictionary<string, string>(common) { ["ConnectionStrings__DefaultConnection"] = CommunityConnection, ["Services__Enabled"] = "true", ["Database__MigrateOnStartup"] = StandardPorts ? "true" : "false" };
+            var monolith = new Dictionary<string, string>(common) { ["ConnectionStrings__DefaultConnection"] = CommunityConnection, ["Services__Enabled"] = "true", ["Database__MigrateOnStartup"] = "true" };
             Start("CinemaCity.AuthService", AuthUrl, auth); Start("CinemaCity.CatalogService", CatalogUrl, catalog); Start("CinemaCity.CommunityService", MonolithUrl, monolith);
             await Task.WhenAll(WaitReadyAsync(AuthUrl), WaitReadyAsync(CatalogUrl), WaitReadyAsync(MonolithUrl));
             Start("CinemaCity.ApiGateway", gatewayUrl, new Dictionary<string, string>(common) { ["Gateway__Mode"] = "Services" });

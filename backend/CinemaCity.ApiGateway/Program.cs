@@ -25,6 +25,7 @@ builder.Services.AddCors(options => options.AddDefaultPolicy(policy => policy
 builder.Services.AddOcelot(builder.Configuration).AddDelegatingHandler<DownstreamLoggingHandler>(true);
 var app = builder.Build();
 app.UseExceptionHandler(error => error.Run(context => GatewayPolicies.Problem(context, 500, "An unexpected gateway error occurred", context.RequestAborted)));
+app.UseMiddleware<ProblemResponseMiddleware>();
 app.UseCors();
 app.UseMiddleware<GatewayMiddleware>();
 app.UseAuthentication();

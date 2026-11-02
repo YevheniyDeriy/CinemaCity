@@ -18,7 +18,7 @@ x-service-build: &service-build
 
 services:
   postgres:
-    image: postgres:18
+    image: postgres:18-alpine
     container_name: cinemacity-services-postgres
     environment:
       POSTGRES_DB: cinemacity
@@ -114,7 +114,7 @@ services:
     depends_on: [gateway]
 
   postgres-test:
-    image: postgres:18
+    image: postgres:18-alpine
     profiles: [test]
     environment:
       POSTGRES_DB: cinemacity_tests

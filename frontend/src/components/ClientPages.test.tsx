@@ -10,7 +10,7 @@ it('retains one key after a network failure and rejects duplicate button submiss
   let resolvePost: (value: unknown) => void = () => {};
   const keys: string[] = []; let attempts = 0;
   vi.spyOn(api, 'request').mockImplementation(async (_path, init) => {
-    if (!init?.method) return [] as never;
+    if (!init?.method) return { items: [] } as never;
     keys.push(new Headers(init.headers).get('Idempotency-Key')!); attempts++;
     if (attempts === 1) throw new ApiError(0, 'Немає зв’язку із сервером.');
     return await new Promise<unknown>(resolve => { resolvePost = resolve; }) as never;
@@ -23,7 +23,7 @@ it('retains one key after a network failure and rejects duplicate button submiss
 });
 it('shows validation beside the score field', async () => {
   vi.spyOn(api, 'request').mockImplementation(async (_path, init) => {
-    if (!init?.method) return [] as never;
+    if (!init?.method) return { items: [] } as never;
     throw new ApiError(400, 'Перевірте введені дані.', { score: ['Відхилено сервером.'] });
   });
   form(); const input = await screen.findByRole('spinbutton'); fireEvent.change(input, { target: { value: '7' } }); fireEvent.submit(input.closest('form')!);
@@ -45,4 +45,17 @@ it('does not reset a fast pagination click with the initial search debounce', as
   await screen.findByText('Page 2');
   await new Promise(resolve => setTimeout(resolve, 450));
   expect(screen.getByText('Сторінка 2 з 2')).toBeTruthy();
+});
+
+it('shows a cached public catalog with an explicit stale warning after network failure', async () => {
+  localStorage.clear();
+  const data = { items: [{ id: 'cached', title: 'Cached film', releaseYear: 2026, posterUrl: null }], page: 1, pageSize: 12, totalCount: 1 };
+  const request = vi.spyOn(api, 'request').mockResolvedValue(data);
+  const view = render(<MemoryRouter><ClientCatalog /></MemoryRouter>);
+  await screen.findByText('Cached film'); view.unmount();
+  request.mockRejectedValue(new ApiError(0, 'Offline'));
+  render(<MemoryRouter><ClientCatalog /></MemoryRouter>);
+  await screen.findByText('Cached film');
+  expect(screen.getByText(/Показано застарілі дані каталогу/)).toBeTruthy();
+  localStorage.clear();
 });

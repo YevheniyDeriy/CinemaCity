@@ -5,4 +5,11 @@
     <ProjectReference Include="../../backend/CinemaCity.CatalogService/CinemaCity.CatalogService.csproj" />
     <ProjectReference Include="../../backend/CinemaCity.Infrastructure/CinemaCity.Infrastructure.csproj" />
   </ItemGroup>
+  <!-- This offline tool reads connections from the environment, not service appsettings. -->
+  <Target Name="ExcludeServiceSettingsFromPublish" BeforeTargets="_HandleFileConflictsForPublish">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
+                             Condition="$([System.String]::Copy('%(ResolvedFileToPublish.Filename)').StartsWith('appsettings')) and '%(ResolvedFileToPublish.Extension)' == '.json'" />
+    </ItemGroup>
+  </Target>
 </Project>

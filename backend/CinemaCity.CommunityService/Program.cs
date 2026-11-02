@@ -54,7 +54,7 @@ app.Use(async (context, next) =>
     await next(context);
 });
 app.UseRouting();
-app.UseServiceDefaults();
+app.UseServiceDefaults(normalizeErrors: true);
 app.UseStaticFiles();
 if (app.Configuration.GetValue("Services:Enabled", false)) app.UseMiddleware<ReferenceProjectionMiddleware>();
 app.UseMiddleware<IdempotencyMiddleware>();

@@ -18,6 +18,12 @@ public static class RatingEndpoints
             .WithSummary("Current user's published ratings; cancellation uses the existing DELETE route.")
             .Produces<RatingOperationResponse[]>(200).ProducesProblem(401);
 
+        group.MapGet("/page", RatingWorkflow.PageAsync).WithSummary("Own rating history with SQL pagination and status filtering")
+            .Produces(200).ProducesValidationProblem().ProducesProblem(401);
+        group.MapGet("/{ratingId:guid}", RatingWorkflow.DetailsAsync).WithSummary("Own active or cancelled rating; others return 404")
+            .Produces<RatingOperationResponse>(200).ProducesProblem(401).ProducesProblem(404);
+        group.MapPost("/{ratingId:guid}/cancel", RatingWorkflow.DeleteRatingAsync).WithSummary("Cancel a rating while retaining its history; repeated cancellation is safe")
+            .Produces(204).ProducesProblem(401).ProducesProblem(404);
         group.MapPost("/", RatingWorkflow.CreateRatingAsync)
             .WithName("CreateRating");
 

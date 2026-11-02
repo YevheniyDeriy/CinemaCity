@@ -7,7 +7,8 @@ WORKDIR /src
 COPY Directory.Build.props ./
 COPY backend/ backend/
 COPY tools/ tools/
-RUN dotnet publish ${PROJECT_FOLDER}/${PROJECT}/${PROJECT}.csproj -c Release -o /app/publish /p:UseAppHost=false
+RUN --mount=type=cache,target=/root/.nuget/packages \
+    dotnet publish ${PROJECT_FOLDER}/${PROJECT}/${PROJECT}.csproj -c Release -o /app/publish /p:UseAppHost=false -m:1
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 ARG PROJECT

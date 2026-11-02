@@ -8,6 +8,36 @@ namespace CinemaCity.API.Ratings;
 
 public static class RatingWorkflow
 {
+    public static async Task<IResult> PageAsync(ClaimsPrincipal principal, IRepository<Rating> ratings,
+        CancellationToken ct, int page = 1, int pageSize = 12, string status = "All", Guid? movieId = null)
+    {
+        if (page < 1 || pageSize < 1 || pageSize > 100 || !new[] { "All", "Active", "Cancelled" }.Contains(status))
+            return Results.ValidationProblem(new Dictionary<string, string[]> { ["page"] = ["Use page >= 1, pageSize 1–100 and status All, Active or Cancelled."] });
+        var userId = GetUserId(principal);
+        var query = ratings.Query().IgnoreQueryFilters().AsNoTracking().Where(r => r.UserId == userId);
+        if (status == "Active") query = query.Where(r => r.CancelledAt == null);
+        if (status == "Cancelled") query = query.Where(r => r.CancelledAt != null);
+        if (movieId is Guid target) query = query.Where(r => r.MovieId == target);
+        var totalCount = await query.CountAsync(ct);
+        var items = await query.OrderByDescending(r => r.CreatedAt).ThenBy(r => r.Id)
+            .Skip((page - 1) * pageSize).Take(pageSize)
+            .Select(r => new RatingOperationResponse(r.Id, r.MovieId, r.EpisodeId,
+                r.MovieId != null ? r.Movie!.Title : r.Episode!.Title, r.Score,
+                r.CancelledAt == null ? "Active" : "Cancelled", r.CreatedAt)).ToArrayAsync(ct);
+        return Results.Ok(new { items, page, pageSize, totalCount });
+    }
+
+    public static async Task<IResult> DetailsAsync(Guid ratingId, ClaimsPrincipal principal, IRepository<Rating> ratings, CancellationToken ct)
+    {
+        var userId = GetUserId(principal);
+        var item = await ratings.Query().IgnoreQueryFilters().AsNoTracking()
+            .Where(r => r.Id == ratingId && r.UserId == userId)
+            .Select(r => new RatingOperationResponse(r.Id, r.MovieId, r.EpisodeId,
+                r.MovieId != null ? r.Movie!.Title : r.Episode!.Title, r.Score,
+                r.CancelledAt == null ? "Active" : "Cancelled", r.CreatedAt)).FirstOrDefaultAsync(ct);
+        return item is null ? Results.NotFound() : Results.Ok(item);
+    }
+
     public static async Task<IResult> MyRatingsAsync(ClaimsPrincipal principal, IRepository<Rating> ratings, CancellationToken ct)
     {
         var userId = GetUserId(principal);
@@ -145,11 +175,14 @@ public static class RatingWorkflow
         IRepository<Episode> episodeRepository,
         IRepository<Rating> ratingRepository,
         IUnitOfWork unitOfWork,
+        CinemaCity.Infrastructure.Data.AppDbContext db,
         CancellationToken cancellationToken)
     {
         var userId = GetUserId(principal);
         var isAdmin = IsAdmin(principal);
-        var rating = await ratingRepository.Query().FirstOrDefaultAsync(candidate => candidate.Id == ratingId, cancellationToken);
+        await using var transaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
+        await db.Database.ExecuteSqlInterpolatedAsync($"SELECT pg_advisory_xact_lock(hashtextextended({ratingId.ToString()}, 0))", cancellationToken);
+        var rating = await ratingRepository.Query().IgnoreQueryFilters().FirstOrDefaultAsync(candidate => candidate.Id == ratingId, cancellationToken);
 
         if (rating is null)
         {
@@ -161,13 +194,16 @@ public static class RatingWorkflow
             return Results.NotFound(new { Message = "Rating was not found." });
         }
 
+        if (rating.CancelledAt is not null) return Results.NoContent();
+
         var movieId = rating.MovieId;
         var episodeId = rating.EpisodeId;
         var previousScore = rating.Score;
 
-        await using var transaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
 
-        ratingRepository.Remove(rating);
+
+        rating.CancelledAt = DateTimeOffset.UtcNow;
+        rating.UpdatedAt = rating.CancelledAt;
         await ApplyTargetRatingChangeAsync(movieRepository, episodeRepository, unitOfWork, movieId, episodeId, previousScore, null, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);

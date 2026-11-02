@@ -7,6 +7,7 @@ import './client-pages.css';
 type Card = { id: string; title: string; releaseYear: number; posterUrl: string | null };
 type MoviePage = { items: Card[]; totalCount: number; page: number; pageSize: number };
 type Screen = { movie: Card; myState: { myScore: number | null; watchlistStatus: string | null; lists: { id: string; name: string }[] } | null; partial: boolean; communityStatus: string };
+type RatingPage = { items: Rating[]; page: number; pageSize: number; totalCount: number };
 type Rating = { id: string; movieId: string | null; episodeId: string | null; title: string; score: number; status: string; createdAt: string };
 function useCooldown(path: string) {
   const [seconds, setSeconds] = useState(() => api.remaining(path));
@@ -21,17 +22,26 @@ function useResource<T>(path: string, tick = 0) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const [loading, setLoading] = useState(true);
+  const [stale, setStale] = useState(false);
   const navigate = useNavigate(); const location = useLocation();
   useEffect(() => {
-    const controller = new AbortController(); setLoading(true); setError(null); setData(null);
-    api.request<T>(path, { signal: controller.signal }).then(result => { if (!controller.signal.aborted) setData(result); }).catch(error => {
+    const controller = new AbortController(); setLoading(true); setError(null); setData(null); setStale(false);
+    api.request<T>(path, { signal: controller.signal }).then(result => { if (!controller.signal.aborted) {
+        setData(result);
+        if (path.startsWith('/api/v1/catalog/items?')) { try { localStorage.setItem('cinemacity-public-catalog', JSON.stringify({ path, data: result })); } catch { /* Storage may be unavailable. */ } }
+      } }).catch(error => {
       if (controller.signal.aborted) return;
+      if (error instanceof ApiError && error.status === 0 && path.startsWith('/api/v1/catalog/items?')) {
+        try { const cached = JSON.parse(localStorage.getItem('cinemacity-public-catalog') || 'null');
+          if (cached?.path === path && Array.isArray(cached.data?.items)) { setData(cached.data); setStale(true); return; }
+        } catch { /* A bad cache never prevents a normal error message. */ }
+      }
       if (error instanceof ApiError && error.status === 401) navigate(`/auth?returnTo=${encodeURIComponent(location.pathname)}`, { replace: true });
       else setError(error);
     }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [path, tick]);
-  return { data, error, loading };
+  return { data, error, loading, stale };
 }
 function Fields({ errors, name }: { errors: FieldErrors; name: string }) {
   return errors[name]?.length ? <span className="client-field-error" role="alert">{errors[name].join(' ')}</span> : null;
@@ -44,9 +54,10 @@ export function ClientCatalog() {
   const [query, setQuery] = useState(''); const [search, setSearch] = useState(''); const [page, setPage] = useState(1); const [tick, setTick] = useState(0);
   useEffect(() => { if (query.trim() === search) return; const id = setTimeout(() => { setSearch(query.trim()); setPage(1); }, 400); return () => clearTimeout(id); }, [query, search]);
   const path = `/api/v1/catalog/items?page=${page}&pageSize=12&search=${encodeURIComponent(search)}&sortBy=title&desc=false`;
-  const { data, error, loading } = useResource<MoviePage>(path, tick);
+  const { data, error, loading, stale } = useResource<MoviePage>(path, tick);
   const total = data ? Math.max(1, Math.ceil(data.totalCount / data.pageSize)) : 1;
   return <section className="client-page"><Intro eyebrow="CinemaCity / Каталог" title="Знайдіть свій наступний фільм"><p>Фільми й серіали, ваші оцінки та списки перегляду.</p><Link to="/my-ratings">Мої оцінки →</Link></Intro>
+    {stale ? <div className="client-warning" role="status">Немає з’єднання. Показано застарілі дані каталогу. <button onClick={() => setTick(tick + 1)}>Повторити</button></div> : null}
     <label className="client-search">Пошук фільму<input type="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="Введіть назву…" /></label>
     {loading ? <Loading /> : error ? <ErrorPanel error={error} path={path} retry={() => setTick(tick + 1)} /> : data && data.items.length === 0 ? <div className="client-empty"><h2>Нічого не знайдено</h2><p>Спробуйте іншу назву.</p><button onClick={() => setQuery('')}>Очистити пошук</button></div> : <>
       <div className="client-grid">{data?.items.map(movie => <Link className="client-card" key={movie.id} to={`/movies/${movie.id}`}>
@@ -78,8 +89,8 @@ export function ClientRatingForm() {
   const [busy, setBusy] = useState(false); const inFlight = useRef(false); const key = useRef<string | null>(null); const sentBody = useRef<string | null>(null);
   const [errors, setErrors] = useState<FieldErrors>({}); const [error, setError] = useState<Error | null>(null); const [tick, setTick] = useState(0);
   const path = '/api/ratings'; const cooldown = useCooldown(path);
-  const mine = useResource<Rating[]>('/api/ratings', tick);
-  const existing = mine.data?.find(rating => rating.movieId === id);
+  const mine = useResource<RatingPage>(`/api/ratings/page?status=Active&movieId=${id}&pageSize=1`, tick);
+  const existing = mine.data?.items[0];
   async function submit(event: FormEvent) {
     event.preventDefault(); if (inFlight.current || cooldown) return;
     const value = Number(score);
@@ -105,15 +116,18 @@ export function ClientRatingForm() {
   </section>;
 }
 export function ClientMyRatings() {
-  const [tick, setTick] = useState(0); const path = '/api/ratings'; const { data, error, loading } = useResource<Rating[]>(path, tick);
+  const [tick, setTick] = useState(0); const [page, setPage] = useState(1); const [status, setStatus] = useState('Active');
+  const path = `/api/ratings/page?page=${page}&pageSize=12&status=${status}`; const { data, error, loading } = useResource<RatingPage>(path, tick);
   const [busy, setBusy] = useState<string | null>(null); const [actionError, setActionError] = useState<Error | null>(null); const cooldown = useCooldown(path);
   async function cancel(id: string) {
     if (busy) return; setBusy(id); setActionError(null);
-    try { await api.request(`/api/ratings/${id}`, { method: 'DELETE' }); setTick(tick + 1); } catch (error) { setActionError(error as Error); } finally { setBusy(null); }
+    try { await api.request(`/api/ratings/${id}/cancel`, { method: 'POST', body: '{}' }); setPage(1); setTick(tick + 1); } catch (error) { setActionError(error as Error); } finally { setBusy(null); }
   }
   return <section className="client-page"><Intro eyebrow="Ваш кінопростір" title="Мої оцінки"><p>Ваші опубліковані оцінки. Скасування прибирає оцінку з фільму.</p><Link to="/catalog">Обрати фільм →</Link></Intro>
+    <label>Статус оцінки<select aria-label="Статус оцінки" value={status} onChange={e => { setStatus(e.target.value); setPage(1); }}><option value="Active">Опубліковані</option><option value="Cancelled">Скасовані</option><option value="All">Усі</option></select></label>
     {actionError ? <ErrorPanel error={actionError} path={path} retry={() => { setActionError(null); setTick(tick + 1); }} /> : null}
-    {loading ? <Loading /> : error ? <ErrorPanel error={error} path={path} retry={() => setTick(tick + 1)} /> : !data?.length ? <div className="client-empty"><h2>Оцінок ще немає</h2><p>Знайдіть фільм у каталозі та поділіться враженням.</p><Link to="/catalog">Перейти до каталогу</Link></div> : <ul className="client-operations">{data.map(rating => <li className="client-surface" key={rating.id}><div><h2>{rating.movieId ? <Link to={`/movies/${rating.movieId}`}>{rating.title}</Link> : rating.title}</h2><span className="client-badge">{rating.status === 'Active' ? 'Опубліковано' : rating.status}</span><p>{new Date(rating.createdAt).toLocaleDateString('uk-UA')} · {rating.score} / 10</p></div><button disabled={busy !== null || cooldown > 0} onClick={() => cancel(rating.id)}>{busy === rating.id ? 'Скасовуємо…' : 'Скасувати оцінку'}</button></li>)}</ul>}
+    {loading ? <Loading /> : error ? <ErrorPanel error={error} path={path} retry={() => setTick(tick + 1)} /> : !data?.items.length ? <div className="client-empty"><h2>Оцінок ще немає</h2><p>Знайдіть фільм у каталозі та поділіться враженням.</p><Link to="/catalog">Перейти до каталогу</Link></div> : <ul className="client-operations">{data.items.map(rating => <li className="client-surface" key={rating.id}><div><h2>{rating.movieId ? <Link to={`/movies/${rating.movieId}`}>{rating.title}</Link> : rating.title}</h2><span className="client-badge">{rating.status === 'Active' ? 'Опубліковано' : 'Скасовано'}</span><p>{new Date(rating.createdAt).toLocaleDateString('uk-UA')} · {rating.score} / 10</p></div><button disabled={rating.status !== 'Active' || busy !== null || cooldown > 0} onClick={() => cancel(rating.id)}>{rating.status === 'Cancelled' ? 'Скасовано' : busy === rating.id ? 'Скасовуємо…' : 'Скасувати оцінку'}</button></li>)}</ul>}
+    {data && data.totalCount > 0 ? <nav className="client-pagination" aria-label="Сторінки оцінок"><button disabled={loading || page <= 1} onClick={() => setPage(page - 1)}>Назад</button><span>Сторінка {page} з {Math.max(1, Math.ceil(data.totalCount / data.pageSize))}</span><button disabled={loading || page * data.pageSize >= data.totalCount} onClick={() => setPage(page + 1)}>Далі</button></nav> : null}
   </section>;
 }
 export function ClientAuth() {

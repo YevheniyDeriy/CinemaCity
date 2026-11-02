@@ -68,9 +68,10 @@ public static class ServiceDefaults
         return services;
     }
 
-    public static WebApplication UseServiceDefaults(this WebApplication app)
+    public static WebApplication UseServiceDefaults(this WebApplication app, bool normalizeErrors = false)
     {
         app.UseExceptionHandler();
+        if (normalizeErrors) app.UseMiddleware<ProblemResponseMiddleware>();
         app.UseMiddleware<CorrelationMiddleware>();
         app.UseCors();
         app.UseSwagger();

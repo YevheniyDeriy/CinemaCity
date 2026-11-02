@@ -481,6 +481,8 @@ namespace CinemaCity.Infrastructure.Data.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
+                    b.Property<DateTimeOffset?>("CancelledAt").HasColumnType("timestamp with time zone").HasColumnName("cancelled_at");
+
                     b.Property<Guid?>("EpisodeId")
                         .HasColumnType("uuid")
                         .HasColumnName("episode_id");
@@ -510,11 +512,11 @@ namespace CinemaCity.Infrastructure.Data.Migrations
 
                     b.HasIndex("UserId", "EpisodeId")
                         .IsUnique()
-                        .HasFilter("episode_id IS NOT NULL");
+                        .HasFilter("episode_id IS NOT NULL AND cancelled_at IS NULL");
 
                     b.HasIndex("UserId", "MovieId")
                         .IsUnique()
-                        .HasFilter("movie_id IS NOT NULL");
+                        .HasFilter("movie_id IS NOT NULL AND cancelled_at IS NULL");
 
                     b.ToTable("ratings", null, t =>
                         {

@@ -21,10 +21,7 @@ internal sealed class GatewayMiddleware(RequestDelegate next, ILogger<GatewayMid
                 return;
             }
             await next(context);
-            if (!context.Response.HasStarted && context.Response.StatusCode is 502 or 503 or 504)
-            {
-                await GatewayPolicies.Problem(context, 503, "The requested service is unavailable", context.RequestAborted);
-            }
+
         }
         finally
         {
